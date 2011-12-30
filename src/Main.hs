@@ -10,13 +10,12 @@ import Database.HDBC
 import Database.HDBC.PostgreSQL
 import Feed
 import Parse
+import Entry
 
 
 main = do
-    ents <- listEntries "http://feeds.feedburner.com/OpenCulture?fmt=xml"
-    case ents of
-        Nothing -> putStrLn "Nothing"
-        Just x  -> putStrLn $ show x
+    updateFeed "http://feeds.feedburner.com/OpenCulture?fmt=xml"
+    putStrLn "Done"
 
 
 

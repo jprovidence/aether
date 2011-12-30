@@ -1,6 +1,6 @@
 module Parse (
-    listEntries
-,   Entry(Entry, description, date)
+    urlEntries
+,   parseFeed
 ) where
 
 {-# LANGUAGE Arrows, NoMonomorphismRestriction #-}
@@ -9,19 +9,15 @@ import Control.Monad
 import qualified Network.HTTP as H
 import Network.URI
 import Text.XML.HXT.Core
+import Entry
 
 
 userAgent :: String
 userAgent = "Mozilla/5.0 (en-US) Firefox/2.0.0.6667"
 
 
-data Entry = Entry { description :: String
-                   , date        :: String
-                   } deriving Show
-
-
-listEntries :: String -> IO (Maybe [Entry])
-listEntries url =
+urlEntries :: String -> IO (Maybe [Entry])
+urlEntries url =
     get url >>= \r ->
     case r of
         Nothing   -> return Nothing
@@ -54,7 +50,8 @@ getEntries tag = proc xml -> do
     desc <- listA (atTag tag >>> atTag "description" >>> text) -< xml
     pubd <- listA (atTag tag >>> atTag "pubDate" >>> text) -< xml
     ddat <- listA (atTag tag >>> atTag "date" >>> text) -< xml
-    returnA <<< arr (map (\x -> Entry (fst x) (snd x))) <<< arr (zip desc) <<< merge -<< (pubd, ddat)
+    titl <- listA (atTag tag >>> atTag "title" >>> text) -< xml
+    returnA <<< arr (map (\(a, b, c) -> Entry a b c)) <<< arr (zip3 desc titl) <<< merge -<< (pubd, ddat)
 
 merge :: ArrowXml a => a ([b], [b]) [b]
 merge = proc tpl -> do

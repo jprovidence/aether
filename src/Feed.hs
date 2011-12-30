@@ -1,9 +1,12 @@
 module Feed (
-    feedFromUrl
+    assimilateFeed
+,   feedFromUrl
 ,   feedFromId
 ,   find
 ,   transact
 ,   wrap
+,   updateFeed
+,   overflow
 ,   numEntries
 ,   lastUpdate
 ,   entries
@@ -13,11 +16,13 @@ module Feed (
 import qualified Data.ByteString.Char8 as B
 import qualified Data.List as L
 import Data.Maybe
+import Control.Monad
 import qualified Control.Exception as EX
 import System.IO.Unsafe
 import Database.HDBC
 import Database.HDBC.PostgreSQL
 import Parse
+import Entry
 
 
 connStr :: String
@@ -48,7 +53,7 @@ wrap func = do
 
 assimilateFeed :: String -> IO ()
 assimilateFeed url =
-    listEntries url >>= \es ->
+    urlEntries url >>= \es ->
     case es of
         Nothing -> putStrLn "_ticket: No entries found"
         Just xs -> do
@@ -57,22 +62,44 @@ assimilateFeed url =
             mapM_ (save con url) xs
             disconnect con
 
+updateFeed :: String -> IO ()
+updateFeed url =
+    urlEntries url >>= \mes ->
+    case mes of
+        Nothing -> return ()
+        Just es -> do
+            overflow url es >>= \ovf -> transact (\c -> mapM_ (save c url) ovf)
+            transact (\c -> updateUpdate c url (date $ es !! 0))
+            return ()
+
+overflow :: String -> [Entry] -> IO [Entry]
+overflow url es =
+    feedFromUrl url >>= flip find (lastUpdate) . fromJust >>= return . toDate >>= \d ->
+    return (L.filter (\x -> d < (fromStrDate $ date x)) es)
+
+updateUpdate :: Connection -> String -> String -> IO (Integer)
+updateUpdate con url d = do
+    let id  = unsafePerformIO $ feedFromUrl url >>= return . show . _id . fromJust
+        sql = "update feeds set last_update='" ++ d ++ "' where id=" ++ id ++ ";"
+    prepare con sql >>= flip execute []
+
 saveMstr :: Connection -> [Entry] -> String -> IO (Integer)
 saveMstr con es url = do
     let a = "'" ++ (show $ length es) ++ "'"
         b = "'" ++ (show $ date (es !! 0)) ++ "'"
         c = "'" ++ url ++ "'"
-        d = concat $ L.intersperse ", " [a, b, c]
+        d = L.intercalate ", " [a, b, c]
     sql <- return $  "insert into feeds (num_entries, last_update, url) values (" ++ d ++ ");"
     withTransaction con (\c -> prepare c sql >>= flip execute [])
 
 save :: Connection -> String -> Entry -> IO (Integer)
 save con url e = do
-    let a = description e
-        b = unsafePerformIO (feedFromUrl url >>= return . show . _id . fromJust)
-        c = date e
-        d = concat $ L.intersperse ", " [a, b, c]
-    sql <- return $ "insert into entries (content, feed_id, date) values (" ++ d ++ ");"
+    let a = "'" ++ (description e) ++ "'"
+        b = "'" ++ (unsafePerformIO (feedFromUrl url >>= return . show . _id . fromJust)) ++ "'"
+        c = "'" ++ (date e) ++ "'"
+        d = "'" ++ (title e) ++ "'"
+        z = concat $ L.intersperse ", " [a, b, c, d]
+    sql <- return $ "insert into entries (content, feed_id, date, title) values (" ++ z ++ ");"
     withTransaction con (\c -> prepare c sql >>= flip execute [])
 
 
@@ -132,11 +159,13 @@ lastUpdate i = wrap (lastUpdate' i)
               mapM (return . fromJust . fromSql . (flip (!!) 0)) rows >>= return . flip (!!) 0
 
 
-entries :: Int -> IO [ByteString]
+entries :: Int -> IO [Entry]
 entries i = wrap (entries' i)
 
-    where entries' :: Int -> Connection -> IO [ByteString]
+    where entries' :: Int -> Connection -> IO [Entry]
           entries' i con = do
-              let sel = "select * from entries where feed_id=" ++ (show i) ++ ";"
+              let sel  = "select * from entries where feed_id=" ++ (show i) ++ ";"
+                  f x  = fromJust . fromSql . (flip (!!) x)
               rows <- quickQuery' con sel []
-              mapM (return . B.pack . fromJust . fromSql . (flip (!!) 1)) rows
+              return $ map (\e -> Entry {description=(f 1 e), date=(f 3 e), title=(f 4 e)}) rows
+
