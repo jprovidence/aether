@@ -98,8 +98,9 @@ save con url e = do
         b = "'" ++ (unsafePerformIO (feedFromUrl url >>= return . show . _id . fromJust)) ++ "'"
         c = "'" ++ (date e) ++ "'"
         d = "'" ++ (title e) ++ "'"
-        z = concat $ L.intersperse ", " [a, b, c, d]
-    sql <- return $ "insert into entries (content, feed_id, date, title) values (" ++ z ++ ");"
+        f = "'" ++ (link e) ++ "'"
+        z = concat $ L.intersperse ", " [a, b, c, d, f]
+    sql <- return $ "insert into entries (content, feed_id, date, title, link) values (" ++ z ++ ");"
     withTransaction con (\c -> prepare c sql >>= flip execute [])
 
 
@@ -167,5 +168,5 @@ entries i = wrap (entries' i)
               let sel  = "select * from entries where feed_id=" ++ (show i) ++ ";"
                   f x  = fromJust . fromSql . (flip (!!) x)
               rows <- quickQuery' con sel []
-              return $ map (\e -> Entry {description=(f 1 e), date=(f 3 e), title=(f 4 e)}) rows
+              return $ map (\e -> Entry {description=(f 1 e), date=(f 3 e), title=(f 4 e), link=(f 5 e)}) rows
 

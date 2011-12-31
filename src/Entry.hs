@@ -4,7 +4,7 @@ module Entry (
 ,   toDate
 ,   date'
 ,   fromStrDate
-,   Entry(Entry, description, date, title)
+,   Entry(Entry, description, date, title, link)
 ) where
 
 
@@ -19,6 +19,7 @@ import qualified Data.List as L
 
 data Entry = Entry { description :: String
                    , title       :: String
+                   , link        :: String
                    , date        :: String
                    } deriving Show
 
