@@ -12,6 +12,7 @@ import Feed
 import Parse
 import Entry
 import Communication
+import Viterbi
 
 
 main = do
