@@ -1,5 +1,5 @@
 module Viterbi (
-
+    trainVit
 ) where
 
 
@@ -7,48 +7,105 @@ import qualified Data.HashTable.IO as M
 import qualified Data.ByteString.Char8 as B
 import qualified Data.List as L
 import Data.Maybe
+import Data.HashTable
 import Control.Monad
+import Control.Parallel
+import Control.Parallel.Strategies
 import System.IO.Unsafe
+import System.Directory
 
 
-type Table k v = M.BasicHashTable k v
+
+
+----------------------------------------------------------------------------------------------------
+
+-- DATA STUCTURES
+
+----------------------------------------------------------------------------------------------------
+
+-- type aliases
+
+type Table k v = M.CuckooHashTable k v
 type ByteString = B.ByteString
 type NestedMap = Table ByteString (Table ByteString Float)
 
 
+----------------------------------------------------------------------------------------------------
+
+-- data structure to hold the statistics gained from training. Also simplies both the training and
+-- tagging process
+
 data Vit = Vit { projections :: NestedMap
                , inherants   :: NestedMap
-               , lastWord    :: Maybe ByteString
+               , lastTag     :: Maybe ByteString
                } deriving Show
 
 
+
+
+----------------------------------------------------------------------------------------------------
+
+-- TRAINING
+
+----------------------------------------------------------------------------------------------------
+
+-- train a tagger on the brown corpus
+
+trainVit :: IO Vit
+trainVit = newVit >>= \v -> corpusFiles >>= mapM B.readFile >>= foldM incTraining v
+
+
+----------------------------------------------------------------------------------------------------
+
+-- get the path to each file in the corpus
+
+corpusFiles :: IO [String]
+corpusFiles = getDirectoryContents "./brown" >>= return . L.map ("./brown/" ++) . L.filter isFile
+
+    where isFile :: String -> Bool
+          isFile s = s /= "." && s /= ".."
+
+
+----------------------------------------------------------------------------------------------------
+
+-- increment the algorithm's training on a single pre-tagged document
+
 incTraining :: Vit -> ByteString -> IO Vit
 incTraining vit str =
-    let spl = B.splitWith splFunc str
-    in newVit >>= \nv -> foldM mergeV nv spl >>= toPercent
-
-    where splFunc :: Char -> Bool
-          splFunc w = w == ' ' || w == '\n' || w == '\t'
+    let spl = L.filter filterFunc $ B.splitWith splFunc str
+    in foldM mergeV vit spl >>= finalize
 
 
-toPercent :: Vit -> IO Vit
-toPercent v =
+----------------------------------------------------------------------------------------------------
+
+-- finalize the training session so the algorithm may be used for tagging.
+
+finalize :: Vit -> IO Vit
+finalize v =
     let proj = projections v
         inhe = inherants v
-    in M.mapM_ toPercent' proj >> M.mapM_ toPercent' inhe >> return v
+    in M.mapM_ toPercent proj >> M.mapM_ toPercent inhe >> return v
 
-    where toPercent' :: (ByteString, Table ByteString Float) -> IO ()
-          toPercent' (_, m) = let ttl = M.foldM (\acc (_, v) -> return $ acc + v) 0 m
+    where toPercent :: (ByteString, Table ByteString Float) -> IO ()
+          toPercent (_, m) = let ttl = M.foldM (\acc (_, v) -> return $ acc + v) 0 m
                               in ttl >>= \t -> M.mapM_ (\(k, v) -> return $ (v / t) * 100) m
 
+
+----------------------------------------------------------------------------------------------------
+
+-- add a single word/tag pair to the viterbi's statistics
 
 mergeV :: Vit -> ByteString -> IO Vit
 mergeV v str =
     let spl = B.split '/' str
-    in add (lastWord v) (spl !! 1) (projections v) >>= \a ->
+    in add (lastTag v) (spl !! 1) (projections v) >>= \a ->
        add (Just $ spl !! 0) (spl !! 1) (inherants v) >>= \b ->
-       return $ Vit a b (Just $ spl !! 0)
+       return $ Vit a b (Just $ spl !! 1)
 
+
+----------------------------------------------------------------------------------------------------
+
+-- resolves how to insert a given word/tag pair into a NestedMap
 
 add :: Maybe ByteString -> ByteString -> NestedMap -> IO NestedMap
 
@@ -64,6 +121,10 @@ add (Just wd) tag m
           deJust = return . fromJust
 
 
+----------------------------------------------------------------------------------------------------
+
+-- determines whether a specific word and tag has been encoutered already
+
 depthOfGiven :: NestedMap -> ByteString -> ByteString -> Int
 depthOfGiven m word tag = unsafePerformIO $
     m `M.lookup` word >>= \res ->
@@ -75,7 +136,134 @@ depthOfGiven m word tag = unsafePerformIO $
                       Just y  -> return 2
 
 
+
+
+----------------------------------------------------------------------------------------------------
+
+-- APPLICATION
+
+----------------------------------------------------------------------------------------------------
+
+-- tag a given string with its parts of speech
+
+tag :: Vit -> ByteString -> IO ByteString
+tag unv str = return (clear unv) >>= \v -> liftM snd $ foldM resolve (v, B.empty) $ B.splitWith splFunc str
+
+
+----------------------------------------------------------------------------------------------------
+
+-- resolve the part of speech of a given word, based on its context and training statistics
+
+resolve :: (Vit, ByteString) -> ByteString -> IO (Vit, ByteString)
+resolve (v, last) str
+    | isBlank last = (inherants v) `M.lookup` str >>= greatestSingleTag >>= \x ->
+                     return $ (updateVitLast v x, (str `B.snoc` '/') `B.append` x)
+    | otherwise = do
+        pr <- (projections v) `M.lookup` last
+        ih <- (inherants v) `M.lookup` str
+        tg <- greatestMutualTag pr ih
+        return $ (updateVitLast v tg, (str `B.snoc` '/') `B.append` tg)
+
+
+----------------------------------------------------------------------------------------------------
+
+-- extract the most probable tag in a single tag
+
+greatestSingleTag :: Maybe (Table ByteString Float) -> IO ByteString
+
+greatestSingleTag Nothing = return $ B.pack "unk"
+
+greatestSingleTag (Just m) = liftM fst $ M.foldM compareProb (B.pack "unk", 0) m
+
+    where compareProb :: (ByteString, Float) -> (ByteString, Float) -> IO (ByteString, Float)
+          compareProb (t, acc) (k, v) = case acc < v of
+                                            True  -> return (k, v)
+                                            False -> return (t, acc)
+
+
+----------------------------------------------------------------------------------------------------
+
+-- extract the most probable tag from the combination of two tables
+
+greatestMutualTag :: Maybe (Table ByteString Float) -> Maybe (Table ByteString Float) -> IO ByteString
+
+greatestMutualTag Nothing (Just m) = greatestSingleTag (Just m)
+
+greatestMutualTag (Just m) Nothing = greatestSingleTag (Just m)
+
+greatestMutualTag (Just pr) (Just ih) =
+    M.foldM (lrgMutual pr) (B.pack "unk", 0) ih >>= return . fst >>= \x ->
+    case x == B.pack "unk" of
+        True -> greatestSingleTag (Just ih)
+        _    -> return x
+
+
+
+----------------------------------------------------------------------------------------------------
+
+-- return the most likely tag given two viterbi tables. For use with fold, see #greatestMutualTag
+
+lrgMutual :: Table ByteString Float -> (ByteString, Float) -> (ByteString, Float) -> IO (ByteString, Float)
+lrgMutual tbl acc (tag, pc) = tbl `M.lookup` tag >>= \res ->
+                               case res of
+                                   Nothing    -> return acc
+                                   Just match -> case (snd acc) < (pc * match) of
+                                       True  -> return $ (tag, pc * match)
+                                       False -> return acc
+
+
+
+
+----------------------------------------------------------------------------------------------------
+
+-- UTILS
+
+----------------------------------------------------------------------------------------------------
+
+-- determine whether a tag is capable of contributing a projection
+
+isBlank :: ByteString -> Bool
+isBlank str = str == B.empty || str == (B.pack "unk")
+
+
+----------------------------------------------------------------------------------------------------
+
+-- determine whether a character is a space/tab/newline
+
+splFunc :: Char -> Bool
+splFunc w = w == ' ' || w == '\n' || w == '\t'
+
+
+----------------------------------------------------------------------------------------------------
+
+-- determine whether a ByteString is a valid word (note not Data.Word, word in the langauge sense)
+
+filterFunc :: ByteString -> Bool
+filterFunc b = (b /= B.pack " ") && (b /= B.empty)
+
+
+----------------------------------------------------------------------------------------------------
+
+-- reset the lastWord field of a Vit
+
+clear :: Vit -> Vit
+clear v = Vit (projections v) (inherants v) Nothing
+
+
+----------------------------------------------------------------------------------------------------
+
+-- update the lastWord field of a Vit
+
+updateVitLast :: Vit -> ByteString -> Vit
+updateVitLast v str = Vit (projections v) (inherants v) (Just str)
+
+
+----------------------------------------------------------------------------------------------------
+
+-- constructs a new Viterbi data structure
+
 newVit :: IO Vit
 newVit = M.new >>= \a -> M.new >>= \b -> return $ Vit a b Nothing
 
 
+----------------------------------------------------------------------------------------------------

@@ -16,12 +16,7 @@ import Viterbi
 
 
 main = do
-    --updateFeed "http://feeds.feedburner.com/OpenCulture?fmt=xml"
-    h <- htmlLinks "http://feedproxy.google.com/~r/OpenCulture/~3/Rbryt9iinus/john_lennon_sums_up_elvis.html"
-    case h of
-        Nothing -> putStrLn "Nothing"
-        Just x  -> putStrLn $ show x
-    putStrLn "Done"
+    trainVit >>= putStrLn . show
 
 
 
