@@ -1,5 +1,6 @@
 module Parse (
     urlEntries
+,   htmlText
 ,   htmlLinks
 ,   parseFeed
 ) where
@@ -17,6 +18,33 @@ import Entry
 
 userAgent :: String
 userAgent = "Mozilla/5.0 (en-US) Firefox/2.0.0.6667"
+
+
+----------------------------------------------------------------------------------------------------
+
+-- get text from html document
+
+htmlText :: String -> IO (Maybe String)
+htmlText url =
+    get url >>= \r ->
+    case r of
+        Nothing   -> return Nothing
+        Just body -> runX (readHtml body >>> deep (getText)) >>= return . Just . join . cleanseHtml
+
+
+cleanseHtml :: [String] -> [String]
+cleanseHtml wds = filter nonsense wds
+
+    where nonsense :: String -> Bool
+          nonsense str = foldl' checkBL True str
+
+          checkBL :: Bool -> Char -> Bool
+          checkBL b c = case b of
+                            False -> b
+                            True  -> not (c `elem` blacklist)
+
+          blacklist :: [Char]
+          blacklist = ['\t', '\n', '\r', '<', '>']
 
 
 ----------------------------------------------------------------------------------------------------

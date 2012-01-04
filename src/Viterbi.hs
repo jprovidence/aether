@@ -1,5 +1,6 @@
 module Viterbi (
     trainVit
+,   tag
 ) where
 
 
@@ -9,8 +10,6 @@ import qualified Data.List as L
 import Data.Maybe
 import Data.HashTable
 import Control.Monad
-import Control.Parallel
-import Control.Parallel.Strategies
 import System.IO.Unsafe
 import System.Directory
 
@@ -147,7 +146,11 @@ depthOfGiven m word tag = unsafePerformIO $
 -- tag a given string with its parts of speech
 
 tag :: Vit -> ByteString -> IO ByteString
-tag unv str = return (clear unv) >>= \v -> liftM snd $ foldM resolve (v, B.empty) $ B.splitWith splFunc str
+tag unv str = return (clear unv) >>= \v ->
+              liftM snd $ foldM resolve (v, B.empty) $ B.splitWith splFunc $ B.filter noPunc str
+
+    where noPunc :: Char -> Bool
+          noPunc c = not (c `L.elem` punctuationMarks)
 
 
 ----------------------------------------------------------------------------------------------------
@@ -156,13 +159,22 @@ tag unv str = return (clear unv) >>= \v -> liftM snd $ foldM resolve (v, B.empty
 
 resolve :: (Vit, ByteString) -> ByteString -> IO (Vit, ByteString)
 resolve (v, last) str
-    | isBlank last = (inherants v) `M.lookup` str >>= greatestSingleTag >>= \x ->
-                     return $ (updateVitLast v x, (str `B.snoc` '/') `B.append` x)
-    | otherwise = do
-        pr <- (projections v) `M.lookup` last
-        ih <- (inherants v) `M.lookup` str
-        tg <- greatestMutualTag pr ih
-        return $ (updateVitLast v tg, (str `B.snoc` '/') `B.append` tg)
+    | isBlank (lastTag v) = (inherants v) `M.lookup` str >>= greatestSingleTag >>= \x ->
+                            return $ (updateVitLast v x, completeAppend last str x)
+    | otherwise =
+        case lastTag v of
+            Nothing -> do
+                x <- (inherants v) `M.lookup` str >>= greatestSingleTag
+                return $ (updateVitLast v x, completeAppend last str x)
+            Just t  -> do
+                pr <- (projections v) `M.lookup` t
+                ih <- (inherants v) `M.lookup` str
+                tg <- greatestMutualTag pr ih
+                return $ (updateVitLast v tg, completeAppend last str tg)
+
+    where completeAppend :: ByteString -> ByteString -> ByteString -> ByteString
+          completeAppend para str tg =
+              (para `B.snoc` ' ') `B.append` ((str `B.snoc` '/') `B.append` tg)
 
 
 ----------------------------------------------------------------------------------------------------
@@ -187,6 +199,8 @@ greatestSingleTag (Just m) = liftM fst $ M.foldM compareProb (B.pack "unk", 0) m
 
 greatestMutualTag :: Maybe (Table ByteString Float) -> Maybe (Table ByteString Float) -> IO ByteString
 
+greatestMutualTag Nothing Nothing = return (B.pack "unk")
+
 greatestMutualTag Nothing (Just m) = greatestSingleTag (Just m)
 
 greatestMutualTag (Just m) Nothing = greatestSingleTag (Just m)
@@ -196,7 +210,6 @@ greatestMutualTag (Just pr) (Just ih) =
     case x == B.pack "unk" of
         True -> greatestSingleTag (Just ih)
         _    -> return x
-
 
 
 ----------------------------------------------------------------------------------------------------
@@ -222,8 +235,9 @@ lrgMutual tbl acc (tag, pc) = tbl `M.lookup` tag >>= \res ->
 
 -- determine whether a tag is capable of contributing a projection
 
-isBlank :: ByteString -> Bool
-isBlank str = str == B.empty || str == (B.pack "unk")
+isBlank :: Maybe ByteString -> Bool
+isBlank Nothing = False
+isBlank (Just str) = str == B.empty || str == (B.pack "unk")
 
 
 ----------------------------------------------------------------------------------------------------
@@ -267,3 +281,10 @@ newVit = M.new >>= \a -> M.new >>= \b -> return $ Vit a b Nothing
 
 
 ----------------------------------------------------------------------------------------------------
+
+-- punctuation
+
+punctuationMarks :: [Char]
+punctuationMarks = ['.', ',', '"', '\'', ':', ';', '(', ')', ']', '[', '\\', '/', '-', '+', '&',
+                    '?', '!', '$', '@', '<', '>', '{', '}', '%', '#']
+
