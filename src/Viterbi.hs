@@ -1,6 +1,8 @@
 module Viterbi (
     trainVit
+,   nouns
 ,   tag
+,   Vit
 ) where
 
 
@@ -143,6 +145,14 @@ depthOfGiven m word tag = unsafePerformIO $
 
 ----------------------------------------------------------------------------------------------------
 
+-- extract only nouns
+
+nouns :: ByteString -> IO [ByteString]
+nouns = return . (mapMaybe isNoun) . (L.filter filterFunc) . B.split ' '
+
+
+----------------------------------------------------------------------------------------------------
+
 -- tag a given string with its parts of speech
 
 tag :: Vit -> ByteString -> IO ByteString
@@ -225,6 +235,13 @@ lrgMutual tbl acc (tag, pc) = tbl `M.lookup` tag >>= \res ->
                                        False -> return acc
 
 
+----------------------------------------------------------------------------------------------------
+
+-- MAINTENANCE
+
+----------------------------------------------------------------------------------------------------
+
+--
 
 
 ----------------------------------------------------------------------------------------------------
@@ -238,6 +255,19 @@ lrgMutual tbl acc (tag, pc) = tbl `M.lookup` tag >>= \res ->
 isBlank :: Maybe ByteString -> Bool
 isBlank Nothing = False
 isBlank (Just str) = str == B.empty || str == (B.pack "unk")
+
+
+----------------------------------------------------------------------------------------------------
+
+-- evaluates to (Just word) if str is a noun, (Nothing) otherwise
+
+isNoun :: ByteString -> Maybe ByteString
+isNoun str = let lst = B.split '/' str
+                 wd  = lst !! 0
+                 tg  = lst !! 1
+             in case tg `L.elem` (L.map B.pack nounTags) of
+                    True  -> Just wd
+                    False -> Nothing
 
 
 ----------------------------------------------------------------------------------------------------
@@ -287,4 +317,15 @@ newVit = M.new >>= \a -> M.new >>= \b -> return $ Vit a b Nothing
 punctuationMarks :: [Char]
 punctuationMarks = ['.', ',', '"', '\'', ':', ';', '(', ')', ']', '[', '\\', '/', '-', '+', '&',
                     '?', '!', '$', '@', '<', '>', '{', '}', '%', '#']
+
+
+----------------------------------------------------------------------------------------------------
+
+-- all noun tags in the Viterbi corpus tag-setAllowBasicAuth
+
+nounTags :: [String]
+nounTags = [ "fw-at+nn", "fw-at+np", "fw-in+nn", "fw-in+np", "fw-nn", "fw-nn$", "fw-nns", "fw-np",
+             "fw-nps", "fw-nr", "nn", "nn$", "nn+bez", "nn+hvd", "nn+hvz", "nn+in", "nn+md", "nn+nn",
+             "nns", "nns$", "nns+md", "np", "np$", "np+bez", "np+hvz", "np+md", "nps", "nps$", "nr",
+             "nr$", "nr+md", "nrs" ]
 

@@ -118,9 +118,9 @@ readPackage h = readBytes 4 h >>= \a -> replicateM a (readBytes 1 h) >>= \b ->
 
 translateURL :: [Package] -> IO [Package]
 translateURL p = htmlLinks (url $ p !! 1) >>= \res ->
-              case res of
-                  Nothing  -> return $ [PreScript 0, Message ""]
-                  Just lks -> return $ format lks
+                 case res of
+                     Nothing  -> return $ [PreScript 0, Message ""]
+                     Just lks -> return $ format lks
 
     where format :: [String] -> [Package]
           format lst = let x = join $ L.intersperse [listSeparator] lst
