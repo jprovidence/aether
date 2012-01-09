@@ -15,13 +15,13 @@ Development of code to:
 
 -  investigate and determine the most efficient/accurate way to rank texts based on similarity.
 -  develop best-practices for writing higher-order functions to facilitate extremely modular code. 
--  provide simple visualisation of the internet as a graph.
+-  provide simple visualization of the internet as a graph.
 
 
 ## What is the (hopeful and ambitious) future for Aether?
 
 The eventual intent is for Aether to become a platform for providing novel approaches to searching, exploring and analysing the 
-internet itself and the wealth of data it contains, and for serving applications built from these endevours.   
+internet itself and the wealth of data it contains, and for serving applications built from these endeavours.   
 Interaction with the platform will hopefully be structured in three tiers:
 
 #### Tier One:
