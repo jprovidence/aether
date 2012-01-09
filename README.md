@@ -7,14 +7,15 @@ Currently aether is a modest collection of experiments in text analysis and data
 on or retrieved from the internet.
 
 
-# What's happening at the moment?
+## What's happening at the moment?
 
 Note: See the '/notes' directory for much more in depth documentation. 
 
 Development of code to:
-- investigate and determine the most efficient/accurate way to rank texts based on similarity.
-- develop best-practices for writing higher-order functions to facilitate extremely modular code. 
-- provide simple visualisation of the internet as a graph.
+
+-  investigate and determine the most efficient/accurate way to rank texts based on similarity.
+-  develop best-practices for writing higher-order functions to facilitate extremely modular code. 
+-  provide simple visualisation of the internet as a graph.
 
 
 ## What is the (hopeful and ambitious) future for Aether?
@@ -26,10 +27,11 @@ Interaction with the platform will hopefully be structured in three tiers:
 #### Tier One:
 
 A comprehensive and modular 'engine' that allows development of programs which:
-- leverage libraries of algorithms for data-mining, machine-learning, data-visualization, etc.
-- manipulate, combine, and modify algorithms and any other code written by other users.
-- make use of any data collected by users.
-- follow a set of interface guidelines so that all code is easy to recycle and all data collected is easily accessible.
+
+-  leverage libraries of algorithms for data-mining, machine-learning, data-visualization, etc.
+-  manipulate, combine, and modify algorithms and any other code written by other users.
+-  make use of any data collected by users.
+-  follow a set of interface guidelines so that all code is easy to recycle and all data collected is easily accessible.
 
 Due to the vast amounts of data involved, much code on this tier will likely execute on the cloud and not be directly a part of any
 specific application. Rather, this level will provide the primary substrate for expanding Aether's functionality. All tested and 
