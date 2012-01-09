@@ -16,12 +16,15 @@ import Viterbi
 import Text.Sim
 
 
-stringOfText = "The Viterbi Algorithm was originally concocted to separate signal from noise in telecom lines. Or something. It happened before I was born, so I’m just taking wikipedia’s word for it. It’s all about probabilities, but I think it can be explained simply by thinking of drunken tourists dancing a conga line. Imagine you were walking past a conga line (you’re both going in the same direction) trying to guess the probability that each person you passed would trip over and get blood all over your Hawaiian shirt. Easy! Of course you could fathom a pretty close guess based on how many Rum’n Cokes that particular person had consumed. The teetotaler probably  has a 10% chance of tripping, whereas the guy with an empty mini-keg as a hat is pushing 60%. We can call these percentages the ‘emission probability’, or the emission of blood onto shirt probability."
+stringOfText = "Finally, duck programmed systems seem more agile in that major changes can be made on the fly without reprogramming. Let’s speak plainly: Without reprogramming doesn’t really mean Without those pesky and expensive programmers. It really means Without all that ridiculous project overhead of writing requirements, writing tests, managing a small project to implement the changes, testing, and signing off that it has been done as specified"
+otherText = "Duck programming also exposes projects to Naked Risk the possibility that bad things will happen without safeguards to prevent it or processes for recovering from disaster. Duck programming can be seductive to development teams because it pushes a lot of project risk away from the project team and onto the shoulders of the users. If something goes drastically wrong, the response from the team will be a shrug and the cryptic notation PBKAC.2 The system works as designed thus any problem is the fault of the users for misusing it."
 
 
 main = do
     vit <- trainVit
-    tag vit (B.pack stringOfText) >>= nouns >>= putStrLn . show
+    --tag vit (B.pack stringOfText) >>= nouns >>= putStrLn . show
+    sim <- similarity vit proportionalRep cartwheel euclideanDistance otherText stringOfText
+    putStrLn $ show sim
     --t <- htmlText "http://www.zerohedge.com/news/guest-post-circling-black-swans-2012"
     --putStrLn $ show t
     --lks <- htmlLinks "http://www.zerohedge.com/news/guest-post-circling-black-swans-2012"
