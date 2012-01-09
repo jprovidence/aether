@@ -83,13 +83,15 @@ Typical evaluation of VBAs when given a document pair can be broken down into th
 There are numerous methods of performing each step, each of which will produce different results. As such, a higher-order function
 is used for combination of these 'sub-functions':
 
-`-- (Haskell) type-signature of a function to coordinate composition of individual sub-functions to form a VBA <br />  
-f :: String ->                                      -- document a  <br />
-     String ->                                      -- document b  <br />
-     (String -> Map String Float) ->                -- tallying function  <br />
-     ([Map String Float] -> [Map String Float]) ->  -- dimensionality reduction function  <br />
-     ([Map String Float] -> Float) ->               -- comparison function  <br />
-     Float                                          -- evaluated, f is a Float, representing the similarity score`
+```haskell
+    -- (Haskell) type-signature of a function to coordinate composition of individual sub-functions to form a VBA <br />  
+    f :: String ->                                      -- document a  <br />
+         String ->                                      -- document b  <br />
+         (String -> Map String Float) ->                -- tallying function  <br />
+         ([Map String Float] -> [Map String Float]) ->  -- dimensionality reduction function  <br />
+         ([Map String Float] -> Float) ->               -- comparison function  <br />
+         Float                                          -- evaluated, f is a Float, representing the similarity score
+```
 
 This provides an environment in which individual components of the algorithm can be substituted for one another in a controlled fashion.
 Each 'sub-function' can be assessed relative to its competitors.  
