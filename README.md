@@ -28,7 +28,7 @@ Interaction with the platform will hopefully be structured in three tiers:
 
 A comprehensive and modular 'engine' that allows development of programs which:
 
--  leverage libraries of algorithms for data-mining, machine-learning, data-visualization, etc.
+-  leverage core libraries/algorithms for data-mining, machine-learning, data-visualization, etc.
 -  manipulate, combine, and modify algorithms and any other code written by other users.
 -  make use of any data collected by users.
 -  follow a set of interface guidelines so that all code is easy to recycle and all data collected is easily accessible.
