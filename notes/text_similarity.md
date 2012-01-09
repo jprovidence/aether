@@ -1,7 +1,9 @@
 # Investigation into computing text similarity.  
   
-  
-  
+***
+-
+-
+
 ## Definitions
 
 - Similarity: the degree to which humans perceive two documents to share a common subject, topic, and context.
