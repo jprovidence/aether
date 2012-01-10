@@ -112,16 +112,16 @@ Brief descriptions and links to the sub-functions implemented are listed below.
 
 **Dimension Equalization** 
 
--- Intersection: Only scores corresponding to words present in both documents are considered. 
--- Injection: Zeros are inserted into the vectors at the indicies corresponding to words exclusive to the other document.
+- Intersection: Only scores corresponding to words present in both documents are considered. 
+- Injection: Zeros are inserted into the vectors at the indicies corresponding to words exclusive to the other document.
  
 **Comparison**
 
 Rather than describe these again here I have provided links to their respective wikipedia articles, which are more thorough
 than I could be.
 
--- Dot product 
--- Cosine similarity
--- Mahalanobis distance
--- Chebyhev distance
+- Dot product 
+- Cosine similarity
+- Mahalanobis distance
+- Chebyhev distance
 
