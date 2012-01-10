@@ -121,11 +121,10 @@ Brief descriptions and links to the sub-functions implemented are listed below.
  
 **Comparison**
 
-Rather than describe these again here I have provided links to their respective wikipedia articles, which are more thorough
+Rather than describe these again here, I have provided links to their respective wikipedia articles, which are more thorough
 than I could be.
 
-- [Dot product](http://en.wikipedia.org/wiki/Dot_product) 
+- [Euclidean distance](http://en.wikipedia.org/wiki/Euclidean_distance) 
 - [Cosine similarity](http://en.wikipedia.org/wiki/Cosine_similarity)
-- [Mahalanobis distance](http://en.wikipedia.org/wiki/Mahalanobis_distance)
 - [Chebyhev distance](http://en.wikipedia.org/wiki/Chebyshev_distance)
 

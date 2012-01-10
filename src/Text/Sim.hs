@@ -1,6 +1,13 @@
 module Text.Sim (
     vbaSimilarityVit
 ,   totalRelative
+,   invTotalRelative
+,   countRelative
+,   invCountRelative
+,   byIntersection
+,   byInjection
+,   euclideanDistance
+,   cosineSimilarity
 ,   TallyF(TallyF)
 ,   DimensionF(DimensionF)
 ,   DistanceF(DistanceF)
@@ -38,12 +45,8 @@ type Map = M.Map
 
 -- Data structure representing the similarity of two documents
 -- @score@     -> The 'distance' between the two documents.
--- @wordRanks@ -> Document words ranked (greatest to least) according to their significance in the
---                ranking process
 
-data Score = Score { score     :: Float
-                   , wordRanks :: [ByteString]
-                   } deriving Show
+type Score = Float
 
 
 ----------------------------------------------------------------------------------------------------
@@ -58,16 +61,15 @@ newtype TallyF = TallyF ([ByteString] -> Map ByteString Float)
 -- Boxing for VBA sub-functions that equalize the number of dimensions between two document
 -- vectors
 
-data DimensionF = DimensionF (Map ByteString Float ->
-                              Map ByteString Float ->
-                              (Map ByteString (Float, Float), [ByteString]))
+newtype DimensionF =
+    DimensionF (Map ByteString Float -> Map ByteString Float -> Map ByteString (Float, Float))
 
 
 ----------------------------------------------------------------------------------------------------
 
 -- Boxing for VBA subfunctions that calculate some measure of distance between two vectors
 
-data DistanceF = DistanceF (Map ByteString (Float, Float) -> Float)
+newtype DistanceF = DistanceF (Map ByteString (Float, Float) -> Score)
 
 
 
@@ -85,10 +87,38 @@ data DistanceF = DistanceF (Map ByteString (Float, Float) -> Float)
 
 vbaSimilarityVit :: Vit -> String -> String -> TallyF -> DimensionF -> DistanceF -> IO Score
 vbaSimilarityVit vit a b (TallyF tallyf) (DimensionF dimenf) (DistanceF distf) =
-    let getSim x y = return (dimenf x y) >>= \(_x, _y) -> return $ Score (distf _x) _y
+    let getSim x y = return (dimenf x y) >>= return . distf
         calcScore x = tag vit (B.pack x) >>= nouns >>= return . tallyf
         scores = sweep (calcScore a, calcScore b)
     in scores >>= \(sa, sb) -> (forceMap sa) `par` ((forceMap sb) `pseq` (getSim sa sb))
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Utility function, similar to "sequence :: [m a] -> m [a]", but for two-tuples
+
+sweep :: Monad m => (m a, m b) -> m (a, b)
+sweep (a, b) = a >>= \_a -> b >>= \_b -> return (_a, _b)
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Utility function, force strict evaluation of a Map
+
+forceMap :: Map a b -> ()
+forceMap m = force $ M.toList m
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Utility function, force strict evaluation of a List
+
+force :: [a] -> ()
+force xs = (go xs) `pseq` ()
+
+    where go :: [a] -> Int
+          go (_:ms) = go ms
+          go [] = 1
 
 
 
@@ -163,59 +193,108 @@ wordCounts :: [ByteString] -> Map ByteString Float
 wordCounts bstr = L.foldl' (\acc x -> M.insertWith (+) x 1 acc) M.empty bstr
 
 
+
+
 ----------------------------------------------------------------------------------------------------
 
 -- Dimension Equalizing Sub-Functions
 
 ----------------------------------------------------------------------------------------------------
 
-{-
+--
 
-cartwheel :: RankingFunction
-cartwheel = RankingFunction cartwheel'
-
-cartwheel' :: DistanceMetric -> Map ByteString Float -> Map ByteString Float -> Score
-cartwheel' (DistanceMetric met) a b =
-     let rankInter = M.toList $ M.intersectionWith (*) a b
-         simInter  = M.intersectionWith (\x y -> (x, y)) a b
-         ranked    = L.map fst $ L.sortBy (comparing snd) rankInter
-     in (force ranked) `par` ((forceMap simInter) `pseq` (Score (met simInter) (ranked)))
+byIntersection :: DimensionF
+byIntersection = DimensionF byIntersection'
 
 
 ----------------------------------------------------------------------------------------------------
 
--- DISTANCE METRICS
+--
+
+byIntersection' :: Map ByteString Float -> Map ByteString Float -> Map ByteString (Float, Float)
+byIntersection' ma mb = M.intersectionWith (\a b -> (a, b)) ma mb
+
 
 ----------------------------------------------------------------------------------------------------
 
-euclideanDistance :: DistanceMetric
-euclideanDistance = DistanceMetric euclideanDistance'
+--
+
+byInjection :: DimensionF
+byInjection = DimensionF byInjection'
 
 
-euclideanDistance' :: Map ByteString (Float, Float) -> Float
+----------------------------------------------------------------------------------------------------
+
+--
+
+byInjection' :: Map ByteString Float -> Map ByteString Float -> Map ByteString (Float, Float)
+byInjection' ma mb =
+    let blanka = M.map (\x -> (x, 0)) $ M.difference ma mb
+        blankb = M.map (\x -> (0, x)) $ M.difference mb ma
+        inters = M.intersectionWith (\a b -> (a, b)) ma mb
+    in L.foldl' M.union M.empty [blanka, blankb, inters]
+
+
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Distance Sub-Functions
+
+----------------------------------------------------------------------------------------------------
+
+--
+
+euclideanDistance :: DistanceF
+euclideanDistance = DistanceF euclideanDistance'
+
+
+----------------------------------------------------------------------------------------------------
+
+--
+
+euclideanDistance' :: Map ByteString (Float, Float) -> Score
 euclideanDistance' = sqrt . (L.foldl' (+) 0) . (L.map (sqDiff . snd)) . M.toList
 
     where sqDiff :: (Float, Float) -> Float
           sqDiff (a, b) = (a - b) ^ 2
 
--}
-----------------------------------------------------------------------------------------------------
-
--- UTILS
 
 ----------------------------------------------------------------------------------------------------
 
-sweep :: Monad m => (m a, m b) -> m (a, b)
-sweep (a, b) = a >>= \_a -> b >>= \_b -> return (_a, _b)
+--
+
+cosineSimilarity :: DistanceF
+cosineSimilarity = DistanceF cosineSimilarity'
 
 
-forceMap :: Map a b -> ()
-forceMap m = force $ M.toList m
+----------------------------------------------------------------------------------------------------
+
+--
+
+cosineSimilarity' :: Map ByteString (Float, Float) -> Score
+cosineSimilarity' m =
+    let tuples       = L.map snd $ M.toList m
+        dotProduct   = L.foldl' dotStep 0 tuples
+        denominator' = (mag $ L.map fst tuples) * (mag $ L.map snd tuples)
+    in dotProduct / denominator'
+
+    where dotStep :: Float -> (Float, Float) -> Float
+          dotStep acc (a, b) = (a * b) + acc
+
+          mag :: [Float] -> Float
+          mag = sqrt . (L.foldl' (\acc x -> (x^2) + acc) 0)
 
 
-force :: [a] -> ()
-force xs = (go xs) `pseq` ()
+----------------------------------------------------------------------------------------------------
 
-    where go :: [a] -> Int
-          go (_:ms) = go ms
-          go [] = 1
+--
+
+mahalanobisDistance :: DistanceF
+mahalanobisDistance = DistanceF mahalanobisDistance'
+
+
+----------------------------------------------------------------------------------------------------
+
+mahalanobisDistance' :: Map ByteString (Float, Float) -> Score
+mahalanobisDistance' m =
