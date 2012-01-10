@@ -104,10 +104,14 @@ Brief descriptions and links to the sub-functions implemented are listed below.
 
 **Tallying Functions**
 
-- Total-Relative: significance = term frequency / total word count
-- Inverse Total-Relative: significance = 1 - (term frequency / total word count)
-- Count-Relative: significance = term frequency / highest term frequency
-- Inverse Count-Relative: significance = 1 - (term frequency / highest term frequency)
+- Total-Relative: 
+  `significance = term frequency / total word count`
+- Inverse Total-Relative: 
+  `significance = 1 - (term frequency / total word count)`
+- Count-Relative: 
+  `significance = term frequency / highest term frequency`
+- Inverse Count-Relative: 
+  `significance = 1 - (term frequency / highest term frequency)`
 
 
 **Dimension Equalization** 
@@ -120,8 +124,8 @@ Brief descriptions and links to the sub-functions implemented are listed below.
 Rather than describe these again here I have provided links to their respective wikipedia articles, which are more thorough
 than I could be.
 
-- Dot product 
-- Cosine similarity
-- Mahalanobis distance
-- Chebyhev distance
+- [Dot product](http://en.wikipedia.org/wiki/Dot_product) 
+- [Cosine similarity](http://en.wikipedia.org/wiki/Cosine_similarity)
+- [Mahalanobis distance](http://en.wikipedia.org/wiki/Mahalanobis_distance)
+- [Chebyhev distance](http://en.wikipedia.org/wiki/Chebyshev_distance)
 

@@ -1,10 +1,5 @@
-
---
--- WORK ONGOING
---
-
 module Text.Sim (
-    similarity
+    vbaSimilarityVit
 ,   totalRelative
 ,   TallyF(TallyF)
 ,   DimensionF(DimensionF)
@@ -20,23 +15,57 @@ import Control.Parallel
 import Viterbi
 
 
+----------------------------------------------------------------------------------------------------
+
+-- typedefs
+
 type ByteString = B.ByteString
 
 type Map = M.Map
+
+
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Vector Based Algorithms (VBAs)
+
+----------------------------------------------------------------------------------------------------
+
+-- Data Structures
+
+----------------------------------------------------------------------------------------------------
+
+-- Data structure representing the similarity of two documents
+-- @score@     -> The 'distance' between the two documents.
+-- @wordRanks@ -> Document words ranked (greatest to least) according to their significance in the
+--                ranking process
 
 data Score = Score { score     :: Float
                    , wordRanks :: [ByteString]
                    } deriving Show
 
 
+----------------------------------------------------------------------------------------------------
 
-data TallyF = TallyF ([ByteString] -> Map ByteString Float)
+-- Boxing for VBA sub-functions that determine term frequency and converts to significance scores
 
+newtype TallyF = TallyF ([ByteString] -> Map ByteString Float)
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Boxing for VBA sub-functions that equalize the number of dimensions between two document
+-- vectors
 
 data DimensionF = DimensionF (Map ByteString Float ->
                               Map ByteString Float ->
                               (Map ByteString (Float, Float), [ByteString]))
 
+
+----------------------------------------------------------------------------------------------------
+
+-- Boxing for VBA subfunctions that calculate some measure of distance between two vectors
 
 data DistanceF = DistanceF (Map ByteString (Float, Float) -> Float)
 
@@ -45,12 +74,17 @@ data DistanceF = DistanceF (Map ByteString (Float, Float) -> Float)
 
 ----------------------------------------------------------------------------------------------------
 
--- NOTE: Only works on text suitable for viterbi. For word collections, use #doubleCartweekStd
---
--- determines the similarity of two texts given the provided processing functions
+-- Governing Functions
 
-similarity :: Vit -> String -> String -> TallyF -> DimensionF -> DistanceF -> IO Score
-similarity vit a b (TallyF tallyf) (DimensionF dimenf) (DistanceF distf) =
+----------------------------------------------------------------------------------------------------
+
+-- NOTE: Only works on text suitable for viterbi. For word collections, use #vbaSimilarityStd
+--
+-- Higher-order function to govern the composition of VBA sub-functions, and to structure them
+-- such that they may execute in parallel.
+
+vbaSimilarityVit :: Vit -> String -> String -> TallyF -> DimensionF -> DistanceF -> IO Score
+vbaSimilarityVit vit a b (TallyF tallyf) (DimensionF dimenf) (DistanceF distf) =
     let getSim x y = return (dimenf x y) >>= \(_x, _y) -> return $ Score (distf _x) _y
         calcScore x = tag vit (B.pack x) >>= nouns >>= return . tallyf
         scores = sweep (calcScore a, calcScore b)
@@ -61,12 +95,22 @@ similarity vit a b (TallyF tallyf) (DimensionF dimenf) (DistanceF distf) =
 
 ----------------------------------------------------------------------------------------------------
 
--- TALLY FUNCTIONS
+-- Tally Sub-Functions
 
 ----------------------------------------------------------------------------------------------------
 
+-- Boxes the function #totalRelative' in a TallyF type
+
 totalRelative :: TallyF
 totalRelative = TallyF totalRelative'
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Determine the frequency of each distinct term in the argument @xs@ :: [ByteString]
+-- Map each word to its frequency, convert these frequencies into a significance based on the
+-- following generalization:
+-- significance = term frequency / (length @xs@)
 
 totalRelative' :: [ByteString] -> Map ByteString Float
 totalRelative' xs = let tally = wordCounts xs
@@ -74,13 +118,28 @@ totalRelative' xs = let tally = wordCounts xs
                     in M.map (flip (/) ttl) tally
 
 
+----------------------------------------------------------------------------------------------------
+
+-- Performs significance attribution by mapping ((-) 1) over each result of totalRelative'
+
 invTotalRelative :: TallyF
 invTotalRelative = TallyF (M.map ((-) 1) . totalRelative')
 
 
+----------------------------------------------------------------------------------------------------
+
+-- Boxes the function #countRelative' in a TallyF type
 
 countRelative :: TallyF
 countRelative = TallyF countRelative'
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Determine the frequency of each distinct term in the argument @xs@ :: [ByteString]
+-- Map each word to its frequency, convert these frequencies into a significance based on the
+-- following generalization:
+-- significance = term frequency / (highest term frequency recorded in @xs@)
 
 countRelative' :: [ByteString] -> Map ByteString Float
 countRelative' xs = let tally = wordCounts xs
@@ -88,19 +147,29 @@ countRelative' xs = let tally = wordCounts xs
                     in M.map (flip (/) maxim) tally
 
 
+----------------------------------------------------------------------------------------------------
+
+-- Performs significance attribution by mapping ((-) 1) over each result of countRelative'
+
 invCountRelative :: TallyF
 invCountRelative = TallyF (M.map ((-) 1) . countRelative')
 
 
+----------------------------------------------------------------------------------------------------
+
+-- Utility function to determine frequency of each term
+
 wordCounts :: [ByteString] -> Map ByteString Float
 wordCounts bstr = L.foldl' (\acc x -> M.insertWith (+) x 1 acc) M.empty bstr
 
+
+----------------------------------------------------------------------------------------------------
+
+-- Dimension Equalizing Sub-Functions
+
+----------------------------------------------------------------------------------------------------
+
 {-
-----------------------------------------------------------------------------------------------------
-
--- RANKING FUNCTIONS
-
-----------------------------------------------------------------------------------------------------
 
 cartwheel :: RankingFunction
 cartwheel = RankingFunction cartwheel'
