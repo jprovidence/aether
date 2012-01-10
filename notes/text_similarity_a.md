@@ -7,7 +7,7 @@
 ## Definitions
 
 - Similarity: the degree to which humans perceive two documents to share a common subject, topic, and context.
-- Accuracy: congruency between computational measurements of similarity with human perception. Higher congruency 
+- Accuracy: congruency between computational measurements of similarity and human perception. Higher congruency 
   corresponds to higher accuracy.
 
 
@@ -22,7 +22,7 @@ to the definitions provided above.
 Given that the following are shown to be correct:
 
 - Different measurement algorithms will yield different scores when comparing the same documents.
-- Each algorithm will approach a relatively constant level of accuracy when over a set of documents.
+- Each algorithm will approach a relatively constant level of accuracy over a set of documents.
 - Outputs of algorithms that share a common computational 'mechanism' (such as term-vectors) will cluster 
   relative to those that do not have common 'mechanisms'.  
 
@@ -50,12 +50,14 @@ The data-set will consist of thirty document pairs (sixty documents total) of va
 given a score by human reader(s) between 0 and 100, with 100 representing identical documents and 0 representing entirely 
 unrelated documents. Due to the subjectivity of human scoring, scores will be normalized according to the following pseudocode:
  
-`ls` is the lowest score awarded by a individualX  
+`ls` is the lowest score awarded by individualX  
 `hs` is the highest score awarded by individualX  
 `score` is an arbitrary score awarded by individualX  
 
-`range = hs - ls;
-normalizedScore = ((score - ls) / range) * 100;` 
+```ruby
+range = hs - ls
+normalizedScore = ((score - ls) / range) * 100
+``` 
 
 
 #### Part-of-speech tagging
@@ -76,7 +78,7 @@ comparing vectors.
 
 Typical evaluation of VBAs when given a document pair can be broken down into three stages:
 
-1. Tally stage: For both documents, record and possibly normalize the frequency of each term.
+1. Tally stage: For both documents, record and convert the frequency of each term into a significance score.
 2. Dimensionality stage: Transform the vectors to ensure they are of the same dimensionality.
 3. Comparison stage: Compare the vectors to determine the level of similarity.
 
@@ -84,20 +86,23 @@ There are numerous methods of performing each step, each of which will produce d
 is used for combination of these 'sub-functions':
 
 ```haskell
-    -- (Haskell) type-signature of a function to coordinate composition of individual sub-functions to form a VBA <br />  
-    f :: String ->                                      -- document a  <br />
-         String ->                                      -- document b  <br />
-         (String -> Map String Float) ->                -- tallying function  <br />
-         ([Map String Float] -> [Map String Float]) ->  -- dimensionality reduction function  <br />
-         ([Map String Float] -> Float) ->               -- comparison function  <br />
+    -- (Haskell) type-signature of a function to coordinate composition of individual sub-functions 
+    -- to form a VBA. Such explicit typing may or may not be used in practice.
+    f :: String ->                                      -- document a  
+         String ->                                      -- document b  
+         (String -> Map String Float) ->                -- tallying function  
+         ([Map String Float] -> [Map String Float]) ->  -- dimensionality reduction function  
+         ([Map String Float] -> Float) ->               -- comparison function  
          Float                                          -- evaluated, f is a Float, representing the similarity score
 ```
 
 This provides an environment in which individual components of the algorithm can be substituted for one another in a controlled fashion.
-Each 'sub-function' can be assessed relative to its competitors.  
+Each 'sub-function' can be assessed relative to its competitors. Descriptions of the subfunctions implemented are listed below.
 
-The following routines will be assessed:
 
-Tallying
+*Tallying Functions*
 
--- Simple word count 
+- Total-Relative: significance = term frequency / total word count
+- Inverse Total-Relative: significance = 1 - (term frequency / total word count)
+
+
