@@ -79,7 +79,7 @@ comparing vectors.
 Typical evaluation of VBAs when given a document pair can be broken down into three stages:
 
 1. Tally stage: For both documents, record and convert the frequency of each term into a significance score.
-2. Dimensionality stage: Transform the vectors to ensure they are of the same dimensionality.
+2. Dimensionality stage: Transform the vectors to ensure they have an equal number of dimensions.
 3. Comparison stage: Compare the vectors to determine the level of similarity.
 
 There are numerous methods of performing each step, each of which will produce different results. As such, a higher-order function
@@ -97,12 +97,31 @@ is used for combination of these 'sub-functions':
 ```
 
 This provides an environment in which individual components of the algorithm can be substituted for one another in a controlled fashion.
-Each 'sub-function' can be assessed relative to its competitors. Descriptions of the subfunctions implemented are listed below.
+Each 'sub-function' can be assessed relative to its competitors. 
+
+Brief descriptions and links to the sub-functions implemented are listed below. 
 
 
-*Tallying Functions*
+**Tallying Functions**
 
 - Total-Relative: significance = term frequency / total word count
 - Inverse Total-Relative: significance = 1 - (term frequency / total word count)
+- Count-Relative: significance = term frequency / highest term frequency
+- Inverse Count-Relative: significance = 1 - (term frequency / highest term frequency)
 
+
+**Dimension Equalization** 
+
+-- Intersection: Only scores corresponding to words present in both documents are considered. 
+-- Injection: Zeros are inserted into the vectors at the indicies corresponding to words exclusive to the other document.
+ 
+**Comparison**
+
+Rather than describe these again here I have provided links to their respective wikipedia articles, which are more thorough
+than I could be.
+
+-- Dot product 
+-- Cosine similarity
+-- Mahalanobis distance
+-- Chebyhev distance
 
