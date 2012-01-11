@@ -62,7 +62,7 @@ normalizedScore = ((score - ls) / range) * 100
 
 #### Vector-based algorithms (VBAs)
 
-###### Construction
+**Construction**
 
 These algorithms operate by converting the document into a vector derived from its individual terms. Similarity is determined by 
 comparing vectors.
@@ -93,7 +93,7 @@ Each 'sub-function' can be assessed relative to its competitors.
 Haskell implementations can be found [here](https://github.com/jprovidence/aether/blob/master/src/Text/Sim.hs), Brief descriptions of 
 the sub-functions implemented are listed below.
 
-**Tallying Functions**
+###### Tallying Functions
 
 - Total-Relative: 
   `significance = term frequency / total word count`
@@ -105,12 +105,12 @@ the sub-functions implemented are listed below.
   `significance = 1 / (term frequency / highest term frequency)`
 
 
-**Dimension Equalization** 
+###### Dimension Equalization
 
 - Intersection: Only scores corresponding to words present in both documents are considered. 
 - Injection: Zeros are inserted into the vectors at the indicies corresponding to words exclusive to the other document.
  
-**Comparison**
+###### Comparison
 
 Vectors are typically compared by determining the angle or distance between them. Three functions have been selected for evaluation
 that use one of these approaches. Rather than describe them again here, I have provided links to their respective wikipedia articles, 
@@ -121,7 +121,7 @@ which are more thorough than I could be.
 - [Chebyhev distance](http://en.wikipedia.org/wiki/Chebyshev_distance)
 
 
-###### Document Preparation
+**Document Preparation**
 
 The easyiest manner in which to apply these functions is to a document string is to split the it at whitespace, tabulations, etc.
 The result is an array of terms which can easily be tallied and processed. The issue of stopwords (a, the, it...) can vastly skew
@@ -129,7 +129,7 @@ results, as these words are numerous in completely unrelated documents. They mus
 terms (those that contain punctuation and strange capitalization) can be remedied by downcasing and filtering for punctuation.   
 
 
-###### Consideration of nouns
+**Consideration of Nouns**
 
 At this point, most 'low hanging' points of the hypothesis can be tested. Each sub-function combiniation can be applied to the prepared
 documents and scoring should, to some degree, be a ranking by similarity. Relative sub-function accuracies can be determined and general 
