@@ -65,9 +65,9 @@ New feeds are incorporated into the index according to the following routine:
 
 1. Visit feed URL and retrive XML data.
 2. Submit data to the parser, which will return `[Entry]`.
-3. Commit feed data to the database:
-   `num_entries` can be initialized by computing the length of the `[Entry]` returned from the parser.
-   `last_updated` corresponds to the most recent returned pubDate.
+3. Commit feed data to the database:  
+   `num_entries` can be initialized by computing the length of the `[Entry]` returned from the parser.  
+   `last_updated` corresponds to the most recent returned pubDate.  
    `url` is the initial url from which all XML data was retrieved.
 4. Obtain the `id` assigned by the database after step 3.
 5. Map a commit action over each item in the returned `[Entry]`:
