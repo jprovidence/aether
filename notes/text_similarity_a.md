@@ -101,6 +101,7 @@ Each 'sub-function' can be assessed relative to its competitors.
 
 Brief descriptions and links to the sub-functions implemented are listed below. 
 
+Haskell implementations can be found [here](https://github.com/jprovidence/aether/blob/master/src/Text/Sim.hs).
 
 **Tallying Functions**
 
