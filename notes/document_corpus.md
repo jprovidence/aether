@@ -70,12 +70,12 @@ New feeds are incorporated into the index according to the following routine:
    `last_updated` corresponds to the most recent returned pubDate.  
    `url` is the initial url from which all XML data was retrieved.
 4. Obtain the `id` assigned by the database after step 3.
-5. Map a commit action over each item in the returned `[Entry]`:
-   `content`, all non-HTML/javascript text between `<description>` tags.
-   `feed_id`, retrieved in step 4.
-   `date`, pubDate of the article
-   `title`, title of the article
-   `link`, origLink if available, otherwise feed link.
+5. Map a commit action over each item in the returned `[Entry]`:  
+   `content`, all non-HTML/javascript text between `<description>` tags.  
+   `feed_id`, retrieved in step 4.  
+   `date`, pubDate of the article  
+   `title`, title of the article  
+   `link`, origLink if available, otherwise feed link.  
 
 
 Feeds are updated by:
