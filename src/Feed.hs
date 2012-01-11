@@ -25,15 +25,40 @@ import Parse
 import Entry
 
 
+
+
+-- NOTE: This module is often implemented in close relation to the Entry module.
+-- An overview of the functioning of this module, as well as Entry can be found at:
+-- https://github.com/jprovidence/aether/blob/master/notes/document_corpus.md
+
+----------------------------------------------------------------------------------------------------
+
+-- details required to connect to the postgreSQL database
+
 connStr :: String
 connStr = "host=localhost dbname=ticket connect_timeout=7 port=5432 user=postgres password=password"
 
+
+----------------------------------------------------------------------------------------------------
+
+-- typedefs
+
 type ByteString = B.ByteString
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Data type to represent an RSS/Atom feed
 
 data Feed = Feed { _url :: String
                  , _id  :: Int
                  } deriving Show
 
+
+----------------------------------------------------------------------------------------------------
+
+-- wraps database interactions with code require to open/close connection and executes it within a
+-- postgres transaction
 
 transact :: (Connection -> IO b) -> IO b
 transact func = do
@@ -43,6 +68,11 @@ transact func = do
     return ret
 
 
+----------------------------------------------------------------------------------------------------
+
+-- wraps database interactions with code require to open/close connection. Code requiring a
+-- transaction is not suitable here
+
 wrap :: (Connection -> IO b) -> IO b
 wrap func = do
     con <- connectPostgreSQL connStr
@@ -50,6 +80,10 @@ wrap func = do
     disconnect con
     return ret
 
+
+----------------------------------------------------------------------------------------------------
+
+-- incorporate a feed url into the overall index
 
 assimilateFeed :: String -> IO ()
 assimilateFeed url =
@@ -62,6 +96,11 @@ assimilateFeed url =
             mapM_ (save con url) xs
             disconnect con
 
+
+----------------------------------------------------------------------------------------------------
+
+-- update a feed which has already been indexed
+
 updateFeed :: String -> IO ()
 updateFeed url =
     urlEntries url >>= \mes ->
@@ -72,16 +111,32 @@ updateFeed url =
             transact (\c -> updateUpdate c url (date $ es !! 0))
             return ()
 
+
+----------------------------------------------------------------------------------------------------
+
+-- select only those entries at the given url which more recent than the newest entry in the given
+-- list
+
 overflow :: String -> [Entry] -> IO [Entry]
 overflow url es =
     feedFromUrl url >>= flip find (lastUpdate) . fromJust >>= return . toDate >>= \d ->
     return (L.filter (\x -> d < (fromStrDate $ date x)) es)
+
+
+----------------------------------------------------------------------------------------------------
+
+-- updates the "last_update" feed in the feeds table row which corresponds to the given url
 
 updateUpdate :: Connection -> String -> String -> IO (Integer)
 updateUpdate con url d = do
     let id  = unsafePerformIO $ feedFromUrl url >>= return . show . _id . fromJust
         sql = "update feeds set last_update='" ++ d ++ "' where id=" ++ id ++ ";"
     prepare con sql >>= flip execute []
+
+
+----------------------------------------------------------------------------------------------------
+
+-- describes the database-interface process required to insert a new feed into postgres
 
 saveMstr :: Connection -> [Entry] -> String -> IO (Integer)
 saveMstr con es url = do
@@ -91,6 +146,11 @@ saveMstr con es url = do
         d = L.intercalate ", " [a, b, c]
     sql <- return $  "insert into feeds (num_entries, last_update, url) values (" ++ d ++ ");"
     withTransaction con (\c -> prepare c sql >>= flip execute [])
+
+
+----------------------------------------------------------------------------------------------------
+
+-- describes the database-interface process required to insert a new entry into postgres
 
 save :: Connection -> String -> Entry -> IO (Integer)
 save con url e = do
@@ -104,6 +164,10 @@ save con url e = do
     withTransaction con (\c -> prepare c sql >>= flip execute [])
 
 
+----------------------------------------------------------------------------------------------------
+
+-- given a url, returns this feed as represented from the database, or Nothing if it does not
+-- exist
 
 feedFromUrl :: String -> IO (Maybe Feed)
 feedFromUrl url = EX.try (wrap (fromUrl url)) >>= \res ->
@@ -119,6 +183,11 @@ feedFromUrl url = EX.try (wrap (fromUrl url)) >>= \res ->
               case fdid of
                   Just x -> return $ Just $ Feed {_url=str, _id=x}
                   _      -> return Nothing
+
+
+----------------------------------------------------------------------------------------------------
+
+-- given an id, returns a feed as represented in the database, or Nothing if it does not exist
 
 feedFromId :: Int -> IO (Maybe Feed)
 feedFromId id = EX.try (wrap (fromId id)) >>= \res ->
@@ -136,9 +205,18 @@ feedFromId id = EX.try (wrap (fromId id)) >>= \res ->
                   _      -> return Nothing
 
 
+----------------------------------------------------------------------------------------------------
+
+-- Higher-order function, takes one of #numEntries, #lastUpdate or #entries and a feed as arguments.
+-- Abstracts the extraction of row_id from the Feed representation
+
 find :: Feed -> (Int -> IO a) -> IO a
 find fd func = func $ _id fd
 
+
+----------------------------------------------------------------------------------------------------
+
+-- given a feed id, return its `num_entries` field
 
 numEntries :: Int -> IO Int
 numEntries i = wrap (numEntries' i)
@@ -150,6 +228,10 @@ numEntries i = wrap (numEntries' i)
               mapM (return . fromJust . fromSql . (flip (!!) 0)) rows >>= return . flip (!!) 0
 
 
+----------------------------------------------------------------------------------------------------
+
+-- given a feed id, return its `last_update` field
+
 lastUpdate :: Int -> IO String
 lastUpdate i = wrap (lastUpdate' i)
 
@@ -159,6 +241,10 @@ lastUpdate i = wrap (lastUpdate' i)
               rows <- quickQuery' con sel []
               mapM (return . fromJust . fromSql . (flip (!!) 0)) rows >>= return . flip (!!) 0
 
+
+----------------------------------------------------------------------------------------------------
+
+-- -- given a feed id, return all associated entries field
 
 entries :: Int -> IO [Entry]
 entries i = wrap (entries' i)
@@ -170,3 +256,5 @@ entries i = wrap (entries' i)
               rows <- quickQuery' con sel []
               return $ map (\e -> Entry {description=(f 1 e), date=(f 3 e), title=(f 4 e), link=(f 5 e)}) rows
 
+
+----------------------------------------------------------------------------------------------------

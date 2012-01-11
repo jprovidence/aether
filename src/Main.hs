@@ -6,8 +6,7 @@ module Main (
 import qualified Data.ByteString.Char8 as B
 import Data.Maybe
 import qualified Control.Exception as EX
-import Database.HDBC
-import Database.HDBC.PostgreSQL
+import System.IO.Unsafe
 import Feed
 import Parse
 import Entry
@@ -16,20 +15,47 @@ import Viterbi
 import Text.Sim
 
 
-stringOfText = "Finally, duck programmed systems seem more agile in that major changes can be made on the fly without reprogramming. Let’s speak plainly: Without reprogramming doesn’t really mean Without those pesky and expensive programmers. It really means Without all that ridiculous project overhead of writing requirements, writing tests, managing a small project to implement the changes, testing, and signing off that it has been done as specified"
-otherText = "Duck programming also exposes projects to Naked Risk the possibility that bad things will happen without safeguards to prevent it or processes for recovering from disaster. Duck programming can be seductive to development teams because it pushes a lot of project risk away from the project team and onto the shoulders of the users. If something goes drastically wrong, the response from the team will be a shrug and the cryptic notation PBKAC.2 The system works as designed thus any problem is the fault of the users for misusing it."
+textA = unsafePerformIO $ readFile "./test_texts/textA.txt"
+textB = unsafePerformIO $ readFile "./test_texts/textB.txt"
 
 
 main = do
-    vit <- trainVit
+    testTextSim
     --tag vit (B.pack stringOfText) >>= nouns >>= putStrLn . show
-    sim <- similarity vit proportionalRep cartwheel euclideanDistance otherText stringOfText
-    putStrLn $ show sim
     --t <- htmlText "http://www.zerohedge.com/news/guest-post-circling-black-swans-2012"
     --putStrLn $ show t
     --lks <- htmlLinks "http://www.zerohedge.com/news/guest-post-circling-black-swans-2012"
     --return lks >>= putStrLn . show . fromJust
     --communicate
+
+
+testTextSim :: IO ()
+testTextSim = do
+    putStrLn "Training Viterbi"
+    vit <- trainVit
+
+    putStrLn "Nouns A"
+    tag vit (B.pack textA) >>= nouns >>= putStrLn . show
+
+    putStrLn "Nouns B"
+    tag vit (B.pack textB) >>= nouns >>= putStrLn . show
+
+    putStrLn "totalRelative byIntersection euclideanDistance"
+    sim <- vbaSimilarityVit vit textA textB totalRelative byIntersection euclideanDistance
+    putStrLn $ show sim
+
+    putStrLn "invTotalRelative byIntersection euclideanDistance"
+    sim <- vbaSimilarityVit vit textA textB invTotalRelative byIntersection euclideanDistance
+    putStrLn $ show sim
+
+    putStrLn "countRelative byIntersection euclideanDistance"
+    sim <- vbaSimilarityVit vit textA textB countRelative byIntersection euclideanDistance
+    putStrLn $ show sim
+
+    putStrLn "invCountRelative byIntersection euclideanDistance"
+    sim <- vbaSimilarityVit vit textA textB invCountRelative byIntersection euclideanDistance
+    putStrLn $ show sim
+
 
 
 

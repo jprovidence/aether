@@ -8,6 +8,7 @@ module Text.Sim (
 ,   byInjection
 ,   euclideanDistance
 ,   cosineSimilarity
+,   chebyshevDistance
 ,   TallyF(TallyF)
 ,   DimensionF(DimensionF)
 ,   DistanceF(DistanceF)
@@ -150,10 +151,10 @@ totalRelative' xs = let tally = wordCounts xs
 
 ----------------------------------------------------------------------------------------------------
 
--- Performs significance attribution by mapping ((-) 1) over each result of totalRelative'
+-- Performs significance attribution by mapping ((/) 1) over each result of totalRelative'
 
 invTotalRelative :: TallyF
-invTotalRelative = TallyF (M.map ((-) 1) . totalRelative')
+invTotalRelative = TallyF (M.map ((/) 1) . totalRelative')
 
 
 ----------------------------------------------------------------------------------------------------
@@ -179,10 +180,10 @@ countRelative' xs = let tally = wordCounts xs
 
 ----------------------------------------------------------------------------------------------------
 
--- Performs significance attribution by mapping ((-) 1) over each result of countRelative'
+-- Performs significance attribution by mapping ((/) 1) over each result of countRelative'
 
 invCountRelative :: TallyF
-invCountRelative = TallyF (M.map ((-) 1) . countRelative')
+invCountRelative = TallyF (M.map ((/) 1) . countRelative')
 
 
 ----------------------------------------------------------------------------------------------------
@@ -290,11 +291,19 @@ cosineSimilarity' m =
 
 --
 
-mahalanobisDistance :: DistanceF
-mahalanobisDistance = DistanceF mahalanobisDistance'
+chebyshevDistance :: DistanceF
+chebyshevDistance = DistanceF chebyshevDistance'
 
 
 ----------------------------------------------------------------------------------------------------
 
-mahalanobisDistance' :: Map ByteString (Float, Float) -> Score
-mahalanobisDistance' m =
+--
+
+chebyshevDistance' :: Map ByteString (Float, Float) -> Score
+chebyshevDistance' = L.maximum . (L.map (abs . tplDiff . snd)) . M.toList
+
+    where tplDiff :: (Float, Float) -> Float
+          tplDiff (a, b) = a - b
+
+
+----------------------------------------------------------------------------------------------------
