@@ -149,7 +149,8 @@ For ease of implementation in this case, the scores of a noun-blind and noun-exc
 hybridized to acheive the same effect. Of course there will be performance implications, but these can be addressed if the approach proves
 most fruitful.
 
-A more robust approach would involve knowledge of noun relations. A corpus of documents to learn from [Appendix B] is therefore necessary.
+A more robust approach would involve knowledge of noun relations. A corpus of documents to learn from [Appendix B] is therefore necessary, 
+as is an [algorithm to group/cluster these nouns](https://github.com/jprovidence/aether/blob/master/notes/noun_clustering.md). 
 
 
 

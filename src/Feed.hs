@@ -17,6 +17,7 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.List as L
 import Data.Maybe
 import Control.Monad
+import Control.Concurrent
 import qualified Control.Exception as EX
 import System.IO.Unsafe
 import Database.HDBC
@@ -33,7 +34,7 @@ import Entry
 
 ----------------------------------------------------------------------------------------------------
 
--- details required to connect to the postgreSQL database
+-- details required to connect to the postgreSQL database. (Password changed for GitHub)
 
 connStr :: String
 connStr = "host=localhost dbname=ticket connect_timeout=7 port=5432 user=postgres password=password"
@@ -95,6 +96,18 @@ assimilateFeed url =
             saveMstr con xs url
             mapM_ (save con url) xs
             disconnect con
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Update all feeds every 6 hours
+
+cyclicalUpdate :: IO ()
+cyclicalUpdate = do
+    fds <- allFeeds
+    case fds of
+        Nothing -> putStrLn "> No feeds detected. Ensure database is initialized and functional"
+        Just xs -> mapM_ (updateFeed . _url) xs >> threadDelay 21600000000 >> cyclicalUpdate
 
 
 ----------------------------------------------------------------------------------------------------
@@ -162,6 +175,25 @@ save con url e = do
         z = concat $ L.intersperse ", " [a, b, c, d, f]
     sql <- return $ "insert into entries (content, feed_id, date, title, link) values (" ++ z ++ ");"
     withTransaction con (\c -> prepare c sql >>= flip execute [])
+
+
+----------------------------------------------------------------------------------------------------
+
+-- select all feeds from the database. Not the most efficient implementation, but simplicity is more
+-- ideal here
+
+allFeeds :: IO (Maybe [Feed])
+allFeeds = EX.try (wrap allFeeds') >>= \res ->
+           case (res :: Either EX.SomeException [Feed]) of
+               Left  _ -> return Nothing
+               Right x -> return $ Just x
+
+    where allFeeds' :: Connection -> IO [Feed]
+          allFeeds' con = do
+              let sel = "select * from feeds;"
+              rows <- quickQuery' con sel []
+              fids <- mapM (return . fromSql . (flip (!!) 0)) rows >>= return . catMaybes
+              mapM feedFromId fids >>= return . catMaybes
 
 
 ----------------------------------------------------------------------------------------------------
