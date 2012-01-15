@@ -1,6 +1,8 @@
 module Viterbi (
     trainVit
 ,   nouns
+,   nounsAndIndices
+,   nounsAndIndices'
 ,   tag
 ,   Vit
 ) where
@@ -149,6 +151,28 @@ depthOfGiven m word tag = unsafePerformIO $
 
 nouns :: ByteString -> IO [ByteString]
 nouns = return . (mapMaybe isNoun) . (L.filter filterFunc) . B.split ' '
+
+
+----------------------------------------------------------------------------------------------------
+
+-- extract nouns and their index in a given document
+
+nounsAndIndices :: ByteString -> IO [(ByteString, Int)]
+nounsAndIndices = (liftM L.reverse) . nounsAndIndices'
+
+
+----------------------------------------------------------------------------------------------------
+
+-- extract nouns and their index in a given document. Will be faster than #nounsAndIndicies, as it
+-- does not bother to reverse the list. Nouns/indices will be backward order
+
+nounsAndIndices' :: ByteString -> IO [(ByteString, Int)]
+nounsAndIndices' = return . fst . (L.foldl' accFunc ([], 0)) . (L.filter filterFunc) . B.split ' '
+
+    where accFunc :: ([(ByteString, Int)], Int) -> ByteString -> ([(ByteString, Int)], Int)
+          accFunc (lst, idx) x = case isNoun x of
+                                     Nothing -> (lst, idx + 1)
+                                     Just n  -> ([(n, idx)] ++ lst, idx + 1)
 
 
 ----------------------------------------------------------------------------------------------------

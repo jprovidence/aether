@@ -31,12 +31,12 @@ The state of the data contained in this graph/graph-set can be used to cluster t
 A good manner in which to cluster given this information would involve:
 
 - randomly and evenly distributing verticies across an n-dimensional space
-- assuming a 'force of attraction' between nouns that share an edge. Strength attributes give the strength of this force.
+- assuming a 'force of attraction' between nouns that share an edge. Strength attributes  strength of this force.
 - adjust the distances between verticies according to these forces until some sort of equilibrium is achieved. 
 
 However, given that many nouns are likely to have a high number of relations, this state of homeostatis will likely provide a rather 'coarse'
 view of noun-groupings (or topics). Somewhat related groups are likely to merge entirely, the entire graph may even converge on a single point. 
-Therefore, the introduction of forces of repulusion between unrelated nouns is necessary. 
+Therefore, the introduction of forces of replusion between unrelated nouns is necessary. 
 
 If repulsive forces are applied universally towards all unrelated nouns in addition to the existing attraction, it is likely that homeostasis 
 will never be attained. A distance threshold that determines whether or not repulsive forces should be applied may fix this issue. 
@@ -56,6 +56,34 @@ Therefore, the first iteration of a noun clustering algorithm should:
 A periodically updated visualization would benefit assessment of the algorithm. 
 
 #### Implementation
+
+###### Obtaining and storing data
+
+Before anything else, nouns must be extracted from documents, their relationship strengths determined, and an undirected graph constructed to 
+represent this. 
+
+Identification of nouns is a simple task. The Viterbi Algorithm can be used to tag nouns with considerable accuracy. Next, relationships must 
+be determined and ranked. A scoring routine must be defined. As a starting point, the following process will be used:
+
+- All nouns in the same document are related.
+- Those in the same document will have their relationship strength increased by one. 
+- Those within 100 words of one another will have their relationship increased again by one.
+- Those within 10 words will have their relationship increased yet again by one.
+
+*It must be noted that scores will be skewed by the 'topic distribution' of the dataset. It is unknown whether this is desired or not, and must 
+be monitored.*
+
+The scoring routine above can be implemented by: 
+
+- Tagging all nouns with the viterbi algorithm
+- Extracting all nouns, recording their index within the document
+- Applying a relationship increase of one between each noun
+- Iterating the noun-set from start to finish, applying relationship increases to each noun with an index advanced fewer than 100 positions.
+- Repeating the above iteration, with a 10 position advance. 
+
+   
+
+###### Analysing the graph
 
 From a high-level perspective, an implementation of the above consists of three main paritions:
 
@@ -91,5 +119,8 @@ simply render this data. Homeostatis will need to respond after analysing its in
 If it were to block, an unnecessary final iteration would be avoided. If it were to simply forge on, one final unnecessary iteration will be
 performed. Most responses will be instructions to continue, however. It follows that performing an extra iteration will likely be less wasteful
 than waiting for each analysis to complete. 
+
+
+
 
 
