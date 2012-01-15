@@ -124,6 +124,6 @@ testNouns = do
     testInitialPositioning
 
 testInitialPositioning :: IO ()
-testInitialPositioning = putStrLn $ show $ initialPositioning 111 10.0
+testInitialPositioning = putStrLn $ show $ initialPositioning 10.0 111
 
 

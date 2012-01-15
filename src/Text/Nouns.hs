@@ -26,12 +26,35 @@ type Chart = Table ByteString [(ByteString, Int)]
 
 ----------------------------------------------------------------------------------------------------
 
---
+-- represents the generalized distance (number of separating words) between two nouns in a document
 
 data IndexDist = Less10
                | Less100
                | Other
 
+
+----------------------------------------------------------------------------------------------------
+
+-- represents a point in the cluster-space
+
+data Point2D = Point2D { nounID :: Int            -- database PKey of the noun
+                       , coords :: (Float, Float) -- position of the point in a 2D cluster-space
+                       } deriving Show
+
+
+-- data type to facilitate cache of relationship strengths,
+-- the vertex-origin of this relationship is implicit
+
+data Strength = Strength { target   :: Int  -- the other vertex on this edge
+                         , strength :: Int  -- measure of relationship strength
+                         } deriving Show
+
+
+-- data type to facilitate caching of relationships on each noun
+
+data RelationCache = RCache { related   :: [Strength]
+                            , unRelated :: [Int]
+                            } deriving Show
 
 ----------------------------------------------------------------------------------------------------
 
@@ -210,12 +233,21 @@ relCreate vtxa vtxb =
 
 --
 
-genericSingleLookup :: String -> Connection -> IO (Maybe Int)
-genericSingleLookup sel con =
+genericLookup :: String -> Connection -> IO (Maybe [Int])
+genericLookup sel con =
     quickQuery' con sel [] >>= \rows ->
     case rows of
         [] -> return Nothing
-        _  -> mapM (return . fromSql . (flip (!!) 0)) rows >>= return . Just . flip (!!) 0
+        _  -> return $ Just $ L.map (fromSql . (flip (!!) 0)) rows
+
+
+----------------------------------------------------------------------------------------------------
+
+--
+
+genericSingleLookup :: String -> Connection -> IO (Maybe Int)
+genericSingleLookup sel con =
+    genericLookup sel con >>= return . liftM (flip (!!) 0)
 
 
 ----------------------------------------------------------------------------------------------------
@@ -226,7 +258,7 @@ genericCreateWid :: String -> String -> Connection -> IO Int
 genericCreateWid ins sel con = do
     withTransaction con (\c -> prepare c ins >>= flip execute [])
     rows <- quickQuery' con sel []
-    mapM (return . fromSql . (flip (!!) 0)) rows >>= return . fromJust . flip (!!) 0
+    return (L.map (fromSql . (flip (!!) 0)) rows) >>= return . fromJust . flip (!!) 0
 
 
 
@@ -237,6 +269,21 @@ genericCreateWid ins sel con = do
 
 ----------------------------------------------------------------------------------------------------
 
+-- assign each noun/vertex its start position in the cluster space, given the size of the space
+
+initClusterSpace :: Float -> IO [Point2D]
+initClusterSpace dimen =
+    numVertices >>= return . initialPositioning dimen >>= \coords ->
+    liftM (flip zip coords) vertexIds >>= \protos ->
+    return $ L.map (\(a, b) -> Point2D a b) protos
+
+
+-- list of all noun database ids
+
+vertexIds :: IO [Int]
+vertexIds = let sel = "select id from vertex;"
+            in wrap (genericLookup sel) >>= return . fromJust
+
 -- number of vertices in the graph
 
 numVertices :: IO Int
@@ -244,19 +291,82 @@ numVertices = let sel = "select count(id) from vertex;"
               in wrap (genericSingleLookup sel) >>= return . fromJust
 
 
+
+cacheEdges :: IO (Table Int RelationCache)
+cacheEdges = do
+    let sel = "select id from vertex;"
+    allIds <- wrap (genericLookup sel) >>= return . fromJust
+    htbl <- M.new
+    mapM_ (\id -> relationSummary' id allIds >>= M.insert htbl id) allIds
+    return htbl
+
+
+
+
+relationSummary :: Int -> IO RelationCache
+relationSummary id = vertexIds >>= relationSummary' id
+
+
+relationSummary' :: Int -> [Int] -> IO RelationCache
+relationSummary' id allIds = do
+    related <- allRelated id
+    unrelated <- allUnrelated' id allIds related
+    strengths <- mapM (strengthBetween id) related
+    return $ RCache strengths unrelated
+
+
+
+-- the ids of all nouns related to the given id
+
+allRelated :: Int -> IO [Int]
+allRelated id = do
+    let sela = "select nodeb from edge where nodea=" ++ (show id) ++ ";"
+        selb = "select nodea from edge where nodeb=" ++ (show id) ++ ";"
+    resa <- wrap (genericLookup sela)
+    resb <- wrap (genericLookup selb)
+    return $ L.concat $ catMaybes [resa, resb]
+
+
+allUnrelated :: Int -> IO [Int]
+allUnrelated id =
+    let sel = "select id from vertex;"
+    in wrap (genericLookup sel) >>= \lst -> allRelated id >>= \excl -> allUnrelated' id (fromJust lst) excl
+
+
+allUnrelated' :: Int -> [Int] -> [Int] -> IO [Int]
+allUnrelated' id lst excl = return $ L.filter (\x -> not (x `L.elem` excl)) lst
+
+
+strengthBetween :: Int -> Int -> IO Strength
+strengthBetween a b = do
+    let sela = "select score from edge where nodea=" ++ (show a) ++ " and nodeb=" ++ (show b) ++ ";"
+        selb = "select score from edge where nodea=" ++ (show b) ++ " and nodeb=" ++ (show a) ++ ";"
+    resa <- wrap (genericSingleLookup sela)
+    resb <- wrap (genericSingleLookup selb)
+    return $ case (resa, resb) of
+                 (Just score, Nothing) -> Strength b score
+                 (Nothing, Just score) -> Strength b score
+                 (Nothing, Nothing)    -> Strength b 0
+
+
+
 ----------------------------------------------------------------------------------------------------
 
 -- build a pseudo-grid (@len@ x @len@) of points given the total number of points total
 
-initialPositioning :: Int -> Float -> [[(Float, Float)]]
-initialPositioning numPts len =
+initialPositioning :: Float -> Int -> [(Float, Float)]
+initialPositioning len numPts =
     let rt = sqrt $ fromIntegral numPts
         rndUp = ceiling rt
         rndDwn = floor rt
-    in case rndUp == rndDwn of
-           True  -> coordsPerfectSq len rndUp
-           False -> coordsMismatch numPts len rndDwn rndUp
+    in L.concat $ case rndUp == rndDwn of
+                      True  -> coordsPerfectSq len rndUp
+                      False -> coordsMismatch numPts len rndDwn rndUp
 
+
+----------------------------------------------------------------------------------------------------
+
+-- construct the pseudo-grid when an integer square can be taken of the number of points
 
 coordsPerfectSq :: Float -> Int -> [[(Float, Float)]]
 coordsPerfectSq len bound =
@@ -264,6 +374,10 @@ coordsPerfectSq len bound =
         coords = take bound [ mod * i | i <- [0..] ]
     in L.map (L.zip coords . L.repeat) coords
 
+
+----------------------------------------------------------------------------------------------------
+
+-- construct the pseudo-grid when an integer square cannot be taken of then number of points
 
 coordsMismatch :: Int -> Float -> Int -> Int -> [[(Float, Float)]]
 coordsMismatch pts len rndDown rndUp
