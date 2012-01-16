@@ -31,6 +31,7 @@ type ByteString = B.ByteString
 data PackageType = UrlTranslation
                  | FeedSubmission
                  | FeedContentRequest
+                 | ClusterNouns
 
 
 ----------------------------------------------------------------------------------------------------
@@ -100,6 +101,7 @@ handleClient sock = do
     pack <- readPackage h
     case pt of
         UrlTranslation -> putStrLn (show pack) >> translateURL pack >>= respond h >> hClose h
+
 
 
 ----------------------------------------------------------------------------------------------------

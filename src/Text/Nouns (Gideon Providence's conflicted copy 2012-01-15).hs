@@ -4,20 +4,13 @@ module Text.Nouns (
 
 
 import Data.Maybe
-import Data.Int
 import qualified Data.List as L
 import qualified Data.ByteString.Char8 as B
 import qualified Data.HashTable.IO as M
 import Control.Exception
 import Control.Monad
-import Control.Concurrent
-import Control.Concurrent.Chan
-import System.IO
 import Database.HDBC
 import Database.HDBC.PostgreSQL
-import Network.Socket
-import Foreign.Storable
-import Foreign.Marshal.Alloc
 import Feed
 import Viterbi
 
@@ -59,7 +52,7 @@ data Strength = Strength { target   :: Int  -- the other vertex on this edge
 -- data type to facilitate caching of relationships on each noun
 
 data RelationCache = RCache { related   :: [Strength]
-                            , unrelated :: [Int]
+                            , unRelated :: [Int]
                             } deriving Show
 
 
@@ -279,127 +272,35 @@ genericCreateWid ins sel con = do
 
 ----------------------------------------------------------------------------------------------------
 
---
-
-runCluster :: Float -> IO ()
-runCluster dimen = do
-    let moveMax = (sqrt ((dimen^2) + (dimen^2))) / 100
-    nchan <- newChan
-    edges <- cacheEdges
-    count <- numVertices
-    verts <- cacheVertices $ initialPositioning dimen count
-    scMax <- scoreMax
-    attrF <- return $ configAttractiveMod linearA moveMax scMax
-    replF <- return $ configRepulsiveMod moveMax (moveMax * 5)
-    forkIO $ waitVisualizationReq nchan
-    iterativeClustering nchan edges verts attrF replF
 
 
-iterativeClustering :: Chan (Table Int Point2D) ->
-                      Table Int RelationCache ->
-                      Table Int Point2D ->
-                      ForceFunc ->
-                      ForceFunc ->
-                      IO ()
-iterativeClustering chan edges verts attrF replF = do
-    reportNewPositions chan verts
-    nVerts <- clusterCycle edges verts attrF replF
-    iterativeClustering chan edges nVerts attrF replF
-
-----------------------------------------------------------------------------------------------------
-
--- apply all forces to each vertex once
-
-clusterCycle :: Table Int RelationCache -> Table Int Point2D -> ForceFunc -> ForceFunc ->
-                IO (Table Int Point2D)
-clusterCycle edges verts attrF replF = do
+clusterCycle :: Table Int RelationCache -> Table Int Point2D -> ForceFunc -> Table Int Point2D
+clusterCycle edges verts ffunc = do
     newVerts <- M.new
-    edgeList <- M.toList edges
-    mapM_ (\edj -> reposition newVerts verts edj attrF replF) edgeList
-    return newVerts
+    M.mapM_ (reposition newVerts verts) edges
 
 
-----------------------------------------------------------------------------------------------------
-
--- reposition a vertex according to the forces acting upon it
-
-reposition :: Table Int Point2D -> Table Int Point2D -> (Int, RelationCache) -> ForceFunc -> ForceFunc ->
-              IO ()
-reposition tbl verts (id, rcache) attrF repulF = do
-    let cleanLookup x = liftM fromJust $ M.lookup verts x
-
-    curPos <- cleanLookup id
-
-    rels <- mapM (prepCache verts) $ related rcache
-    unrels <- mapM cleanLookup (unrelated rcache) >>= \xs -> return $ L.zip xs $ repeat 0
-
-    tempPos <- return $ L.foldl' release curPos $ L.map (coil attrF) rels
-    finalPos <- return $ L.foldl' release tempPos $ L.map (coil repulF) unrels
-
-    M.insert tbl id finalPos
-
-    where prepCache :: Table Int Point2D -> Strength -> IO (Point2D, Int)
-          prepCache tbl s = M.lookup tbl (target s) >>= \pt -> return (fromJust pt, strength s)
-
-          coil :: ForceFunc -> (Point2D, Int) -> (Point2D -> Point2D)
-          coil ff (pt, scr) = applyForce scr ff pt
-
-          release :: Point2D -> (Point2D -> Point2D) -> Point2D
-          release acc f = f acc
+reposition :: Table Int Point2D -> Table Int Point2D -> (Int, RelationCache) -> IO ()
+reposition tbl verts (id, rcache) = do
+    L.map
 
 
-----------------------------------------------------------------------------------------------------
-
--- calculate the new position of a vertex
-
-applyForce :: Int -> ForceFunc -> Point2D -> Point2D -> Point2D
-applyForce score (ForceFunc ff) (Point2D (xa, ya)) (Point2D (xb, yb)) =
-    let curDist = pythagoras (xa - xb) (ya - yb)
+charge :: Int -> ForceFunc -> Point2D -> Point2D -> Point2D
+charge score (ForceFunc ff) (Point2D (xa, ya)) (Point2D (xb, yb)) =
+    let curDist = pythagoras (abs $ xa - xb) (abs $ ya - yb)
         move = ff score curDist
-        moveRatio = move / curDist
-
-    in case moveRatio == 0 of
-        True  -> Point2D (xb, yb)
-        False -> Point2D ((moveRatio * (xa - xb)) + xb, (moveRatio * (ya - yb)) + yb)
+    in (xb - (move * (xa - xb)), yb - (move * (ya - yb)))
 
     where pythagoras :: Float -> Float -> Float
           pythagoras a b = sqrt ((a^2) + (b^2))
 
 
-----------------------------------------------------------------------------------------------------
-
--- configure a repulsive force function for easy passing
-
-configRepulsiveMod :: Float -> Float -> ForceFunc
-configRepulsiveMod moveMax thresh = ForceFunc (modRepulsiveForce moveMax thresh)
+configureModForce :: (Float -> Float -> Float) -> Float -> Int -> ForceFunc
+configureModForce f moveMax scoreMax = ForceFunc (modForce f moveMax scoreMax)
 
 
-----------------------------------------------------------------------------------------------------
-
--- configure an attractive force function for easy passing
-
-configAttractiveMod :: (Float -> Float -> Float) -> Float -> Int -> ForceFunc
-configAttractiveMod f moveMax scoreMax = ForceFunc (modAttractiveForce f moveMax scoreMax)
-
-
-----------------------------------------------------------------------------------------------------
-
--- modulate the repulsive move according to a linear function
-
-modRepulsiveForce :: Float -> Float -> Int -> Float -> Float
-modRepulsiveForce moveMax thresh _ dist =
-    let trespass = 1 - (dist / thresh)
-    in case dist < thresh of
-           False -> 0
-           True  -> trespass * moveMax
-
-
-----------------------------------------------------------------------------------------------------
-
--- modulate the attractive force on a vertex according to distance and the chosen mod function
-
-modAttractiveForce :: (Float -> Float -> Float) -> Float -> Int -> Int -> Float -> Float
-modAttractiveForce f moveMax scoreMax score dist =
+modForce :: (Float -> Float -> Float) -> Float -> Int -> Int -> Float -> Float
+modForce f moveMax scoreMax score dist =
     let fscore = fromIntegral score
         fscoreMax = fromIntegral scoreMax
 
@@ -410,33 +311,17 @@ modAttractiveForce f moveMax scoreMax score dist =
     in naiveMove * moveMultiplier
 
 
-----------------------------------------------------------------------------------------------------
-
--- modulating function for attractive forces, linear
-
-linearA :: Float -> Float -> Float
-linearA a b = a / b
+linear :: Float -> Float -> Float
+linear a b = a / b
 
 
-----------------------------------------------------------------------------------------------------
-
--- modulating function for attractive forces, exponential
-
-exponentialA :: Float -> Float -> Float
-exponentialA a b = (a^2) / (b^2)
+exponential :: Float -> Float -> Float
+exponential a b = (a^2) / (b^2)
 
 
-----------------------------------------------------------------------------------------------------
+fracExponential :: Float -> Float -> Float
+fracExponential a b = (sqrt a) / (sqrt b)
 
--- modulating function for repulsive forces, opposite exponential
-
-fracExponentialA :: Float -> Float -> Float
-fracExponentialA a b = (sqrt a) / (sqrt b)
-
-
-----------------------------------------------------------------------------------------------------
-
--- load edge data into memory from database
 
 cacheEdges :: IO (Table Int RelationCache)
 cacheEdges = do
@@ -447,10 +332,6 @@ cacheEdges = do
     return htbl
 
 
-----------------------------------------------------------------------------------------------------
-
--- load vertex data into memory from database
-
 cacheVertices :: [Point2D] -> IO (Table Int Point2D)
 cacheVertices pts = do
     ids <- vertexIds
@@ -459,16 +340,11 @@ cacheVertices pts = do
     return tbl
 
 
-----------------------------------------------------------------------------------------------------
-
 -- list of all noun database ids
 
 vertexIds :: IO [Int]
 vertexIds = let sel = "select id from vertex;"
             in wrap (genericLookup sel) >>= return . fromJust
-
-
-----------------------------------------------------------------------------------------------------
 
 -- number of vertices in the graph
 
@@ -477,26 +353,15 @@ numVertices = let sel = "select count(id) from vertex;"
               in wrap (genericSingleLookup sel) >>= return . fromJust
 
 
-----------------------------------------------------------------------------------------------------
-
 -- determine the highest current relation score
-
 scoreMax :: IO Int
 scoreMax = let sel = "select score from edge order by score desc limit 1;"
            in wrap (genericSingleLookup sel) >>= return . fromJust
 
 
-----------------------------------------------------------------------------------------------------
-
--- given its id, load all edges on a vertex
-
 relationSummary :: Int -> IO RelationCache
 relationSummary id = vertexIds >>= relationSummary' id
 
-
-----------------------------------------------------------------------------------------------------
-
--- all edges on a vertex, takes an @allIds@ parameter to avoid repeditive lookups
 
 relationSummary' :: Int -> [Int] -> IO RelationCache
 relationSummary' id allIds = do
@@ -506,7 +371,6 @@ relationSummary' id allIds = do
     return $ RCache strengths unrelated
 
 
-----------------------------------------------------------------------------------------------------
 
 -- the ids of all nouns related to the given id
 
@@ -519,28 +383,15 @@ allRelated id = do
     return $ L.concat $ catMaybes [resa, resb]
 
 
-----------------------------------------------------------------------------------------------------
-
--- the ids of all unrelated vertices
-
 allUnrelated :: Int -> IO [Int]
 allUnrelated id =
     let sel = "select id from vertex;"
     in wrap (genericLookup sel) >>= \lst -> allRelated id >>= \excl -> allUnrelated' id (fromJust lst) excl
 
 
-----------------------------------------------------------------------------------------------------
-
--- all unrelated vertices, takes a list of all ids and all ids with which there are relations to
--- avoid repeditive lookups
-
 allUnrelated' :: Int -> [Int] -> [Int] -> IO [Int]
 allUnrelated' id lst excl = return $ L.filter (\x -> not (x `L.elem` excl)) lst
 
-
-----------------------------------------------------------------------------------------------------
-
--- load the unmodulated strength of attraction between two nodes
 
 strengthBetween :: Int -> Int -> IO Strength
 strengthBetween a b = do
@@ -559,14 +410,14 @@ strengthBetween a b = do
 
 -- build a pseudo-grid (@len@ x @len@) of points given the total number of points total
 
-initialPositioning :: Float -> Int -> [Point2D]
+initialPositioning :: Float -> Int -> [(Float, Float)]
 initialPositioning len numPts =
     let rt = sqrt $ fromIntegral numPts
         rndUp = ceiling rt
         rndDwn = floor rt
-    in L.map Point2D $ L.concat $ case rndUp == rndDwn of
-                                      True  -> coordsPerfectSq len rndUp
-                                      False -> coordsMismatch numPts len rndDwn rndUp
+    in L.concat $ case rndUp == rndDwn of
+                      True  -> coordsPerfectSq len rndUp
+                      False -> coordsMismatch numPts len rndDwn rndUp
 
 
 ----------------------------------------------------------------------------------------------------
@@ -613,61 +464,4 @@ coordsMismatch pts len rndDown rndUp
 
     where willOverflow :: Int -> Int -> Bool
           willOverflow pts u = pts > (u * (u - 1))
-
-
-
-
-----------------------------------------------------------------------------------------------------
-
--- Visualization Out
-
-----------------------------------------------------------------------------------------------------
-
---
-
-reportNewPositions :: Chan (Table Int Point2D) -> Table Int Point2D -> IO ()
-reportNewPositions chan tbl = writeChan chan tbl
-
-
-----------------------------------------------------------------------------------------------------
-
---
-
-waitVisualizationReq :: Chan (Table Int Point2D) -> IO ()
-waitVisualizationReq chan = do
-    addrinfo <- getAddrInfo (Just (defaultHints {addrFlags = [AI_PASSIVE]})) Nothing (Just "8001")
-    servaddr <- return $ head addrinfo
-    sock <- socket (addrFamily servaddr) Stream defaultProtocol
-    bindSocket sock (addrAddress servaddr)
-    listen sock 10
-    visualize chan sock
-
-
-visualize :: Chan (Table Int Point2D) -> Socket -> IO ()
-visualize chan sock = do
-    verts <- readChan chan
-    listv <- M.toList verts
-    (connSock, cliAddr) <- accept sock
-    h <- socketToHandle connSock ReadWriteMode
-    hSetBinaryMode h True
-    mapM_ (writePoint h) listv
-    hClose h
-    visualize chan sock
-
-
-writePoint :: Handle -> (Int, Point2D) -> IO ()
-writePoint h (id, Point2D (a, b)) =
-    writeBytes 4 h ((fromIntegral id) :: Int32) >>
-    writeBytes 4 h ((truncate a) :: Int32) >>
-    writeBytes 4 h ((truncate b) :: Int32)
-
--- Writes an object @obj@ of size @nBytes@ to the file handle @h@
-
-writeBytes :: (Storable a) => Int -> Handle -> a -> IO ()
-writeBytes nBytes h obj =
-    mallocBytes nBytes >>= \ptr -> poke ptr obj >> hPutBuf h ptr nBytes >> free ptr
-
-
-
-
 
