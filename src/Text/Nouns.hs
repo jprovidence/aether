@@ -37,9 +37,8 @@ data IndexDist = Less10
 
 -- represents a point in the cluster-space
 
-data Point2D = Point2D { nounID :: Int            -- database PKey of the noun
-                       , coords :: (Float, Float) -- position of the point in a 2D cluster-space
-                       } deriving Show
+newtype Point2D = Point2D { coords :: (Float, Float) -- position of the point in a 2D cluster-space
+                          } deriving Show
 
 
 -- data type to facilitate cache of relationship strengths,
@@ -55,6 +54,10 @@ data Strength = Strength { target   :: Int  -- the other vertex on this edge
 data RelationCache = RCache { related   :: [Strength]
                             , unRelated :: [Int]
                             } deriving Show
+
+
+newtype ForceFunc = ForceFunc { applyF :: (Int -> Float -> Float) }
+
 
 ----------------------------------------------------------------------------------------------------
 
@@ -269,13 +272,71 @@ genericCreateWid ins sel con = do
 
 ----------------------------------------------------------------------------------------------------
 
--- assign each noun/vertex its start position in the cluster space, given the size of the space
 
-initClusterSpace :: Float -> IO [Point2D]
-initClusterSpace dimen =
-    numVertices >>= return . initialPositioning dimen >>= \coords ->
-    liftM (flip zip coords) vertexIds >>= \protos ->
-    return $ L.map (\(a, b) -> Point2D a b) protos
+
+clusterCycle :: Table Int RelationCache -> Table Int Point2D -> ForceFunc -> Table Int Point2D
+clusterCycle edges verts ffunc = do
+    newVerts <- M.new
+    M.mapM_ (reposition newVerts verts) edges
+
+
+reposition :: Table Int Point2D -> Table Int Point2D -> (Int, RelationCache) -> IO ()
+reposition tbl verts (id, rcache) = do
+    L.map
+
+
+charge :: Int -> ForceFunc -> Point2D -> Point2D -> Point2D
+charge score (ForceFunc ff) (Point2D (xa, ya)) (Point2D (xb, yb)) =
+    let curDist = pythagoras (abs $ xa - xb) (abs $ ya - yb)
+        move = ff score curDist
+
+    where pythagoras :: Float -> Float -> Float
+          pythagoras a b = sqrt ((a^2) + (b^2))
+
+
+configureModForce :: (Float -> Float -> Float) -> Float -> Int -> ForceFunc
+configureModForce f moveMax scoreMax = ForceFunc (modForce f moveMax scoreMax)
+
+
+modForce :: (Float -> Float -> Float) -> Float -> Int -> Int -> Float -> Float
+modForce f moveMax scoreMax score dist =
+    let fscore = fromIntegral score
+        fscoreMax = fromIntegral scoreMax
+
+        naiveMove = (fscore / fscoreMax) * moveMax  -- move distance before modulation
+        scHypotenuse = moveMax * 100.0              -- largest distance possible
+        moveMultiplier = f dist scHypotenuse        -- apply modulating function
+
+    in naiveMove * moveMultiplier
+
+
+linear :: Float -> Float -> Float
+linear a b = a / b
+
+
+exponential :: Float -> Float -> Float
+exponential a b = (a^2) / (b^2)
+
+
+fracExponential :: Float -> Float -> Float
+fracExponential a b = (sqrt a) / (sqrt b)
+
+
+cacheEdges :: IO (Table Int RelationCache)
+cacheEdges = do
+    let sel = "select id from vertex;"
+    allIds <- vertexIds
+    htbl <- M.new
+    mapM_ (\id -> relationSummary' id allIds >>= M.insert htbl id) allIds
+    return htbl
+
+
+cacheVertices :: [Point2D] -> IO (Table Int Point2D)
+cacheVertices pts = do
+    ids <- vertexIds
+    tbl <- M.new
+    mapM_ (\(id, pt) -> M.insert tbl id pt) $ zip ids pts
+    return tbl
 
 
 -- list of all noun database ids
@@ -291,16 +352,10 @@ numVertices = let sel = "select count(id) from vertex;"
               in wrap (genericSingleLookup sel) >>= return . fromJust
 
 
-
-cacheEdges :: IO (Table Int RelationCache)
-cacheEdges = do
-    let sel = "select id from vertex;"
-    allIds <- wrap (genericLookup sel) >>= return . fromJust
-    htbl <- M.new
-    mapM_ (\id -> relationSummary' id allIds >>= M.insert htbl id) allIds
-    return htbl
-
-
+-- determine the highest current relation score
+scoreMax :: IO Int
+scoreMax = let sel = "select score from edge order by score desc limit 1;"
+           in wrap (genericSingleLookup sel) >>= return . fromJust
 
 
 relationSummary :: Int -> IO RelationCache
