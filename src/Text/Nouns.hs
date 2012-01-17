@@ -1,5 +1,7 @@
 module Text.Nouns (
-    initialPositioning
+    convertDatabase
+,   runCluster
+,   initialPositioning
 ) where
 
 
@@ -19,6 +21,7 @@ import Network.Socket
 import Foreign.Storable
 import Foreign.Marshal.Alloc
 import Feed
+import Entry
 import Viterbi
 
 
@@ -66,6 +69,13 @@ data RelationCache = RCache { related   :: [Strength]
 newtype ForceFunc = ForceFunc { applyF :: (Int -> Float -> Float) }
 
 
+data ClusterConfiguration = CC { _attrF :: ForceFunc
+                               , _replF :: ForceFunc
+                               , _edges :: Table Int RelationCache
+                               , _verts :: Table Int Point2D
+                               }
+
+
 ----------------------------------------------------------------------------------------------------
 
 -- Database connection parameters (Password altered for github)
@@ -82,6 +92,34 @@ connStr = "host=localhost dbname=ticket connect_timeout=7 port=5432 user=postgre
 ----------------------------------------------------------------------------------------------------
 
 -- Document-Graph Conversion
+
+----------------------------------------------------------------------------------------------------
+
+--
+
+convertDatabase :: IO ()
+convertDatabase = do
+    vit <- trainVit
+    mvar <- newEmptyMVar
+    feeds <- liftM fromJust allFeeds
+    ents <- mapM (\f -> find f entries) feeds >>= return . L.concat
+    docs <- return $ L.map (B.pack . description) ents
+    forkIO $ (\mv -> documentsToGraph vit (odds docs) >> putMVar mv True) mvar
+    documentsToGraph vit $ evens docs
+    takeMVar mvar
+    return ()
+
+
+evens :: [a] -> [a]
+evens lst = snd $ L.foldl' alternator (False, []) lst
+
+odds :: [a] -> [a]
+odds lst = snd $ L.foldl' alternator (True, []) lst
+
+alternator :: (Bool, [a]) -> a -> (Bool, [a])
+alternator acc x = case fst acc of
+                       True  -> (False, [x] ++ (snd acc))
+                       False -> (True, snd acc)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -234,7 +272,10 @@ nounCreate n =
 
 relCreate :: Int -> Int -> IO Int
 relCreate vtxa vtxb =
-    let ins = "insert into edge (nodea, nodeb) values (" ++ (show vtxa) ++ ", " ++ (show vtxb) ++ ");"
+    let ins = "insert into edge (nodea, nodeb, score) values ("
+              ++ (show vtxa) ++ ", "
+              ++ (show vtxb) ++ ", "
+              ++ (show 0) ++ ");"
         sel = "select id from edge where nodea=" ++ (show vtxa) ++ " and nodeb=" ++ (show vtxb) ++ ";"
     in wrap (genericCreateWid ins sel)
 
@@ -281,30 +322,139 @@ genericCreateWid ins sel con = do
 
 --
 
-runCluster :: Float -> IO ()
-runCluster dimen = do
-    let moveMax = (sqrt ((dimen^2) + (dimen^2))) / 100
-    nchan <- newChan
-    edges <- cacheEdges
-    count <- numVertices
-    verts <- cacheVertices $ initialPositioning dimen count
+runCluster :: String -> IO ()
+runCluster src = do
+    case src of
+        "user" -> do
+            putStrLn ">> Enter cluster-space size."
+            dimen <- getLine >>= return . read
+            (edges, verts) <- prepareCache dimen
+            chan <- prepVisualOut
+            runCluster' chan dimen src edges verts
+        _ -> do
+            return ()
+
+
+runCluster' :: Chan (Table Int Point2D) -> Float -> String -> Table Int RelationCache ->
+               Table Int Point2D -> IO ()
+runCluster' chan dimen src edges verts =
+    case src of
+        "user" -> do
+            (attrF, replF) <- userConfigureForces dimen
+            config <- return $ CC attrF replF edges verts
+            enterClusterCycle chan config 0
+            stat <- confirmExit
+            case stat of
+                0 -> runCluster src
+                1 -> runCluster' chan dimen src edges verts
+                2 -> return ()
+
+        _      -> do
+            return ()
+
+
+prepareCache :: Float -> IO (Table Int RelationCache, Table Int Point2D)
+prepareCache dimen = do
+    putStrLn ">> Preparing cache. Perform this in parallel? y/n"
+    input <- getLine
+    case affirmative input of
+        True -> do
+            putStrLn ">> Parallelizing."
+            mvar <- newEmptyMVar
+            count <- numVertices
+            forkIO $ (\mv -> cacheEdges >>= putMVar mv) mvar
+            verts <- cacheVertices $ initialPositioning dimen count
+            edges <- takeMVar mvar
+            return (edges, verts)
+        False -> do
+            putStrLn ">> Single-Threading."
+            count <- numVertices
+            verts <- cacheVertices $ initialPositioning dimen count
+            edges <- cacheEdges
+            return (edges, verts)
+
+
+prepVisualOut :: IO (Chan (Table Int Point2D))
+prepVisualOut = do
+    chan <- newChan
+    forkIO (waitVisualizationReq chan)
+    return chan
+
+
+userConfigureForces :: Float -> IO (ForceFunc, ForceFunc)
+userConfigureForces dimen = do
+    putStrLn ">> Enter a value for the max-move divisor."
+    putStrLn (">> Note: Current cluster-space size is " ++ (show dimen) ++ ".")
+    moveDivisor <- getLine >>= return . read
+
+    moveMax <- return $ dimen / moveDivisor
     scMax <- scoreMax
-    attrF <- return $ configAttractiveMod linearA moveMax scMax
-    replF <- return $ configRepulsiveMod moveMax (moveMax * 5)
-    forkIO $ waitVisualizationReq nchan
-    iterativeClustering nchan edges verts attrF replF
+
+    putStrLn ">> Enter a value for the repulsion threshold."
+    repulThresh <- getLine >>= return . read
+
+    modA <- buildForce "Attractive"
+    modR <- buildForce "Repulsive"
+
+    attrF <- return $ configAttractiveMod modA dimen moveMax scMax
+    replF <- return $ configRepulsiveMod modR moveMax repulThresh
+    return (attrF, replF)
 
 
-iterativeClustering :: Chan (Table Int Point2D) ->
-                      Table Int RelationCache ->
-                      Table Int Point2D ->
-                      ForceFunc ->
-                      ForceFunc ->
-                      IO ()
-iterativeClustering chan edges verts attrF replF = do
-    reportNewPositions chan verts
-    nVerts <- clusterCycle edges verts attrF replF
-    iterativeClustering chan edges nVerts attrF replF
+buildForce :: String -> IO (Float -> Float -> Float)
+buildForce str = do
+    putStrLn (">> How would you like to modulate " ++ str ++ " Forces?")
+    putStrLn ">> 1 : Greater with distance."
+    putStrLn ">> 2 : Lesser with distance."
+    partA <- getLine >>= return . read
+    putStrLn (">> Which function type should be used to modulate " ++ str ++ " Forces?")
+    putStrLn ">> 1 : Linear"
+    putStrLn ">> 2 : Exponential"
+    putStrLn ">> 3 : Fractinal exponential"
+    partB <- getLine >>= return . read
+    return $ case (partA, partB) of
+                 (1, 1) -> linearGD
+                 (1, 2) -> exponentialGD
+                 (1, 3) -> fracExponentialGD
+                 (2, 1) -> linearLD
+                 (2, 2) -> exponentialLD
+                 (2, 3) -> fracExponentialLD
+
+
+confirmExit :: IO Int
+confirmExit = do
+    putStrLn ">> Enter one of the following numbers to continue."
+    putStrLn ">> 0 : Run another cluster, update all cached data."
+    putStrLn ">> 1 : Run another cluster, use existing cache."
+    putStrLn ">> 2 : Exit"
+    getLine >>= return . read
+
+
+affirmative :: String -> Bool
+affirmative str = (str == "y") || (str == "Y")
+
+
+
+enterClusterCycle :: Chan (Table Int Point2D) ->
+                    ClusterConfiguration     ->
+                    Int                      ->
+                    IO ()
+enterClusterCycle chan config count =
+     case count == 100 of
+        True -> do
+            putStrLn ">> 100 cycles completed, continue? y/n"
+            input <- getLine
+            case affirmative input of
+                True  -> enterClusterCycle chan config 0
+                False -> return ()
+
+        False -> do
+            let (e, v, a, r) = ((_edges config), (_verts config), (_attrF config), (_replF config))
+            reportNewPositions chan v
+            newVerts <- clusterCycle e v a r
+            threadDelay 500000
+            enterClusterCycle chan (CC a r e newVerts) (count + 1)
+
 
 ----------------------------------------------------------------------------------------------------
 
@@ -356,39 +506,58 @@ applyForce :: Int -> ForceFunc -> Point2D -> Point2D -> Point2D
 applyForce score (ForceFunc ff) (Point2D (xa, ya)) (Point2D (xb, yb)) =
     let curDist = pythagoras (xa - xb) (ya - yb)
         move = ff score curDist
-        moveRatio = move / curDist
 
-    in case moveRatio == 0 of
+    in case move == 0 of
         True  -> Point2D (xb, yb)
-        False -> Point2D ((moveRatio * (xa - xb)) + xb, (moveRatio * (ya - yb)) + yb)
+        False -> Point2D ((move * (xa - xb)) + xb, (move * (ya - yb)) + yb)
 
     where pythagoras :: Float -> Float -> Float
           pythagoras a b = sqrt ((a^2) + (b^2))
+
+          makePt :: Float -> (Float, Float) -> (Float, Float) -> Point2D
+          makePt move (xa, ya) (xb, yb) =
+              let (xz, yz) = ((move * (xa - xb)) + xb, (move * (ya - yb)) + yb)
+              in Point2D (sanitize xz, sanitize yz)
+
+          sanitize :: Float -> Float
+          sanitize = lwrBnd . uprBnd
+
+          uprBnd :: Float -> Float
+          uprBnd x = case (x > 1000.0) of
+                           False -> x
+                           True  -> 1000.0
+
+          lwrBnd :: Float -> Float
+          lwrBnd x = case (x < 0.0) of
+                         False -> x
+                         True  -> 0.0
+
 
 
 ----------------------------------------------------------------------------------------------------
 
 -- configure a repulsive force function for easy passing
 
-configRepulsiveMod :: Float -> Float -> ForceFunc
-configRepulsiveMod moveMax thresh = ForceFunc (modRepulsiveForce moveMax thresh)
+configRepulsiveMod :: (Float -> Float -> Float) -> Float -> Float -> ForceFunc
+configRepulsiveMod f moveMax thresh = ForceFunc (modRepulsiveForce f moveMax thresh)
 
 
 ----------------------------------------------------------------------------------------------------
 
 -- configure an attractive force function for easy passing
 
-configAttractiveMod :: (Float -> Float -> Float) -> Float -> Int -> ForceFunc
-configAttractiveMod f moveMax scoreMax = ForceFunc (modAttractiveForce f moveMax scoreMax)
+configAttractiveMod :: (Float -> Float -> Float) -> Float -> Float -> Int -> ForceFunc
+configAttractiveMod f dimen moveMax scoreMax =
+    ForceFunc (modAttractiveForce f dimen moveMax scoreMax)
 
 
 ----------------------------------------------------------------------------------------------------
 
 -- modulate the repulsive move according to a linear function
 
-modRepulsiveForce :: Float -> Float -> Int -> Float -> Float
-modRepulsiveForce moveMax thresh _ dist =
-    let trespass = 1 - (dist / thresh)
+modRepulsiveForce :: (Float -> Float -> Float) -> Float -> Float -> Int -> Float -> Float
+modRepulsiveForce f moveMax thresh _ dist =
+    let trespass = f dist thresh
     in case dist < thresh of
            False -> 0
            True  -> trespass * moveMax
@@ -398,14 +567,13 @@ modRepulsiveForce moveMax thresh _ dist =
 
 -- modulate the attractive force on a vertex according to distance and the chosen mod function
 
-modAttractiveForce :: (Float -> Float -> Float) -> Float -> Int -> Int -> Float -> Float
-modAttractiveForce f moveMax scoreMax score dist =
+modAttractiveForce :: (Float -> Float -> Float) -> Float -> Float -> Int -> Int -> Float -> Float
+modAttractiveForce f dimen moveMax scoreMax score dist =
     let fscore = fromIntegral score
         fscoreMax = fromIntegral scoreMax
-
-        naiveMove = (fscore / fscoreMax) * moveMax  -- move distance before modulation
-        scHypotenuse = moveMax * 100.0              -- largest distance possible
-        moveMultiplier = f dist scHypotenuse        -- apply modulating function
+        naiveMove = (fscore / fscoreMax) * moveMax   -- move distance before modulation
+        scHypotenuse = sqrt ((dimen^2) + (dimen^2))  -- greatest dist possible
+        moveMultiplier = f dist scHypotenuse         -- apply modulating function
 
     in naiveMove * moveMultiplier
 
@@ -414,24 +582,35 @@ modAttractiveForce f moveMax scoreMax score dist =
 
 -- modulating function for attractive forces, linear
 
-linearA :: Float -> Float -> Float
-linearA a b = a / b
+linearGD :: Float -> Float -> Float
+linearGD a b = a / b
+
+
+linearLD :: Float -> Float -> Float
+linearLD a b = 1 - (linearGD a b)
 
 
 ----------------------------------------------------------------------------------------------------
 
 -- modulating function for attractive forces, exponential
 
-exponentialA :: Float -> Float -> Float
-exponentialA a b = (a^2) / (b^2)
+exponentialGD :: Float -> Float -> Float
+exponentialGD a b = (a^2) / (b^2)
 
+
+exponentialLD :: Float -> Float -> Float
+exponentialLD a b = 1 - (exponentialGD a b)
 
 ----------------------------------------------------------------------------------------------------
 
 -- modulating function for repulsive forces, opposite exponential
 
-fracExponentialA :: Float -> Float -> Float
-fracExponentialA a b = (sqrt a) / (sqrt b)
+fracExponentialGD :: Float -> Float -> Float
+fracExponentialGD a b = 1 - (fracExponentialLD a b)
+
+
+fracExponentialLD :: Float -> Float -> Float
+fracExponentialLD a b = (sqrt a) / (sqrt b)
 
 
 ----------------------------------------------------------------------------------------------------
@@ -443,6 +622,7 @@ cacheEdges = do
     let sel = "select id from vertex;"
     allIds <- vertexIds
     htbl <- M.new
+    mvar <- newEmptyMVar
     mapM_ (\id -> relationSummary' id allIds >>= M.insert htbl id) allIds
     return htbl
 
@@ -635,24 +815,32 @@ reportNewPositions chan tbl = writeChan chan tbl
 
 waitVisualizationReq :: Chan (Table Int Point2D) -> IO ()
 waitVisualizationReq chan = do
-    addrinfo <- getAddrInfo (Just (defaultHints {addrFlags = [AI_PASSIVE]})) Nothing (Just "8001")
+    --putStrLn ">> Visualizations now available"
+    addrinfo <- getAddrInfo (Just (defaultHints {addrFlags = [AI_PASSIVE]})) Nothing (Just "8000")
     servaddr <- return $ head addrinfo
     sock <- socket (addrFamily servaddr) Stream defaultProtocol
     bindSocket sock (addrAddress servaddr)
     listen sock 10
-    visualize chan sock
+    serve chan sock
+
+
+serve :: Chan (Table Int Point2D) -> Socket -> IO ()
+serve chan sock = do
+    (connSock, cliAddr) <- accept sock
+    forkIO (visualize chan connSock)
+    serve chan sock
 
 
 visualize :: Chan (Table Int Point2D) -> Socket -> IO ()
 visualize chan sock = do
     verts <- readChan chan
     listv <- M.toList verts
-    (connSock, cliAddr) <- accept sock
-    h <- socketToHandle connSock ReadWriteMode
+    listlen <- return $ L.length listv
+    h <- socketToHandle sock ReadWriteMode
     hSetBinaryMode h True
+    writeBytes 4 h ((fromIntegral listlen) :: Int32)
     mapM_ (writePoint h) listv
     hClose h
-    visualize chan sock
 
 
 writePoint :: Handle -> (Int, Point2D) -> IO ()

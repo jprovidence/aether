@@ -38,6 +38,10 @@ processUsrCommands = do
         "-fi" -> communicate
         "-c" -> putStrLn ""
         "-t" -> runAllTests
+        "-tag" -> runTagger
+        "-addFeed" -> addFeeds
+        "-precluster" -> precluster
+        "-nvis" -> runNounVisualization
         "-testTextSim" -> testTextSim
         "-testViterbi" -> testViterbi
         "-testNouns" -> testNouns
@@ -56,9 +60,63 @@ printHelp = do
     putStrLn ">> -fi : Run this instance as a function server"
     putStrLn ">> -c  : Run this instance as a corpus manager"
     putStrLn ">> -t  : Run all test functions"
+    putStrLn ">> -tag : Tag a document"
+    putStrLn ">> -addFeed : Add feeds to the index manually"
+    putStrLn ">> -precluster : Perform some pre-cluster processing"
+    putStrLn ">> -nvis : Run noun visualizations"
     putStrLn ">> -testViterbi : Run tests of the viterbi algorithm"
     putStrLn ">> -testTextSim : Run tests of text similarity functions"
     putStrLn ">> -testNouns : Run tests of the noun clustering functions"
+
+
+
+runTagger :: IO ()
+runTagger = do
+    putStrLn ">> Training Viterbi, please wait..."
+    vit <- trainVit
+    putStrLn ">> Training Complete."
+    doTag vit
+
+doTag :: Vit -> IO ()
+doTag vit = do
+    putStrLn ">> Enter the id of the document you would like to tag."
+    input <- getLine
+    putStrLn (">> Will tag document with id " ++ input ++ ".")
+    entry <- entryFromId (read input)
+    res <- tag vit $ B.pack $ description entry
+    putStrLn ">> Tagged Document: \n\n"
+    putStrLn (show res)
+    putStrLn "\n\n>> Tag Another? y/n"
+    input <- getLine
+    case (input == "y") || (input == "Y") of
+        True  -> doTag vit
+        False -> return ()
+
+
+addFeeds :: IO ()
+addFeeds = do
+    putStrLn ">> Please enter the feed URL"
+    input <- getLine
+    putStrLn (">> Adding feed data at " ++ input ++ ", please wait...")
+    assimilateFeed input
+    putStrLn ">> Would you like to add another? y/n"
+    input <- getLine
+    case input of
+        "y" -> addFeeds
+        "Y" -> addFeeds
+        _   -> return ()
+
+
+precluster :: IO ()
+precluster = do
+    putStrLn ">> -c : Entire database to graph"
+    input <- getLine
+    case input of
+        "-c" -> convertDatabase
+        _    -> return ()
+
+runNounVisualization :: IO ()
+runNounVisualization = runCluster "user"
 
 
 runAllTests :: IO ()

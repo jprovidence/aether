@@ -180,11 +180,22 @@ nounsAndIndices' = return . fst . (L.foldl' accFunc ([], 0)) . (L.filter filterF
 -- tag a given string with its parts of speech
 
 tag :: Vit -> ByteString -> IO ByteString
-tag unv str = return (clear unv) >>= \v ->
-              liftM snd $ foldM resolve (v, B.empty) $ B.splitWith splFunc $ B.filter noPunc str
+tag unv str = do
+    v <- return (clear unv)
+    clean <- return $ cleanStr $ B.splitWith splFunc str
+    liftM snd $ foldM resolve (v, B.empty) clean
 
-    where noPunc :: Char -> Bool
-          noPunc c = not (c `L.elem` punctuationMarks)
+    where cleanStr :: [ByteString] -> [ByteString]
+          cleanStr = mapMaybe rigorousFilter
+
+          rigorousFilter :: ByteString -> Maybe ByteString
+          rigorousFilter str =
+              let np = B.filter noPunc str
+              in case '=' `B.elem` str of
+                     True  -> Nothing
+                     False -> case (np == (B.pack "br")) || (np == (B.pack "hr"))  of
+                                 True  -> Nothing
+                                 False -> Just $ B.filter (\x -> x /= ' ') np
 
 
 ----------------------------------------------------------------------------------------------------
@@ -308,6 +319,14 @@ splFunc w = w == ' ' || w == '\n' || w == '\t'
 
 filterFunc :: ByteString -> Bool
 filterFunc b = (b /= B.pack " ") && (b /= B.empty)
+
+
+----------------------------------------------------------------------------------------------------
+
+-- determine if a char is punctuation
+
+noPunc :: Char -> Bool
+noPunc c = not (c `L.elem` punctuationMarks)
 
 
 ----------------------------------------------------------------------------------------------------

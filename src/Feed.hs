@@ -5,11 +5,14 @@ module Feed (
 ,   find
 ,   transact
 ,   wrap
+,   allFeeds
 ,   updateFeed
 ,   overflow
 ,   numEntries
 ,   lastUpdate
 ,   entries
+,   entryFromId
+,   Feed(Feed, _id, _url)
 ) where
 
 
@@ -24,6 +27,7 @@ import Database.HDBC
 import Database.HDBC.PostgreSQL
 import Parse
 import Entry
+import Viterbi
 
 
 
@@ -90,12 +94,13 @@ assimilateFeed :: String -> IO ()
 assimilateFeed url =
     urlEntries url >>= \es ->
     case es of
-        Nothing -> putStrLn "_ticket: No entries found"
+        Nothing -> putStrLn ">> No entries found."
         Just xs -> do
             con <- connectPostgreSQL connStr
             saveMstr con xs url
             mapM_ (save con url) xs
             disconnect con
+            putStrLn ">> Feed assimilated."
 
 
 ----------------------------------------------------------------------------------------------------
@@ -106,7 +111,7 @@ cyclicalUpdate :: IO ()
 cyclicalUpdate = do
     fds <- allFeeds
     case fds of
-        Nothing -> putStrLn "> No feeds detected. Ensure database is initialized and functional"
+        Nothing -> putStrLn ">> No feeds detected. Ensure database is initialized and functional"
         Just xs -> mapM_ (updateFeed . _url) xs >> threadDelay 21600000000 >> cyclicalUpdate
 
 
@@ -167,10 +172,10 @@ saveMstr con es url = do
 
 save :: Connection -> String -> Entry -> IO (Integer)
 save con url e = do
-    let a = "'" ++ (description e) ++ "'"
+    let a = "'" ++ (L.filter noQuot $ description e) ++ "'"
         b = "'" ++ (unsafePerformIO (feedFromUrl url >>= return . show . _id . fromJust)) ++ "'"
         c = "'" ++ (date e) ++ "'"
-        d = "'" ++ (title e) ++ "'"
+        d = "'" ++ (L.filter noQuot $ title e) ++ "'"
         f = "'" ++ (link e) ++ "'"
         z = concat $ L.intersperse ", " [a, b, c, d, f]
     sql <- return $ "insert into entries (content, feed_id, date, title, link) values (" ++ z ++ ");"
@@ -276,7 +281,7 @@ lastUpdate i = wrap (lastUpdate' i)
 
 ----------------------------------------------------------------------------------------------------
 
--- -- given a feed id, return all associated entries field
+-- given a feed id, return all associated entries field
 
 entries :: Int -> IO [Entry]
 entries i = wrap (entries' i)
@@ -290,3 +295,25 @@ entries i = wrap (entries' i)
 
 
 ----------------------------------------------------------------------------------------------------
+
+-- find an entry by its id
+
+entryFromId :: Int -> IO Entry
+entryFromId id = wrap (efID id) >>= return . flip (!!) 0
+
+    where efID :: Int -> Connection -> IO [Entry]
+          efID id con = do
+              let sel = "select * from entries where id=" ++ (show id) ++ ";"
+                  f x  = fromJust . fromSql . (flip (!!) x)
+              rows <- quickQuery' con sel []
+              return $ map (\e -> Entry {description=(f 1 e), date=(f 3 e), title=(f 4 e), link=(f 5 e)}) rows
+
+
+----------------------------------------------------------------------------------------------------
+
+-- remove single quotes
+
+noQuot :: Char -> Bool
+noQuot c = not (c == '\'' || c == '`')
+
+
