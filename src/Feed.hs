@@ -28,6 +28,7 @@ import Database.HDBC.PostgreSQL
 import Parse
 import Entry
 import Viterbi
+import Utility
 
 
 
@@ -35,14 +36,6 @@ import Viterbi
 -- NOTE: This module is often implemented in close relation to the Entry module.
 -- An overview of the functioning of this module, as well as Entry can be found at:
 -- https://github.com/jprovidence/aether/blob/master/notes/document_corpus.md
-
-----------------------------------------------------------------------------------------------------
-
--- details required to connect to the postgreSQL database. (Password changed for GitHub)
-
-connStr :: String
-connStr = "host=localhost dbname=ticket connect_timeout=7 port=5432 user=postgres password=password"
-
 
 ----------------------------------------------------------------------------------------------------
 
@@ -58,32 +51,6 @@ type ByteString = B.ByteString
 data Feed = Feed { _url :: String
                  , _id  :: Int
                  } deriving Show
-
-
-----------------------------------------------------------------------------------------------------
-
--- wraps database interactions with code require to open/close connection and executes it within a
--- postgres transaction
-
-transact :: (Connection -> IO b) -> IO b
-transact func = do
-    con <- connectPostgreSQL connStr
-    ret <- withTransaction con func
-    disconnect con
-    return ret
-
-
-----------------------------------------------------------------------------------------------------
-
--- wraps database interactions with code require to open/close connection. Code requiring a
--- transaction is not suitable here
-
-wrap :: (Connection -> IO b) -> IO b
-wrap func = do
-    con <- connectPostgreSQL connStr
-    ret <- func con
-    disconnect con
-    return ret
 
 
 ----------------------------------------------------------------------------------------------------

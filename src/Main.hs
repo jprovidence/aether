@@ -14,6 +14,7 @@ import Communication
 import Viterbi
 import Text.Sim
 import Text.Nouns
+import Text.Nouns.Graph
 import Control.Concurrent
 
 
@@ -109,11 +110,10 @@ addFeeds = do
 
 precluster :: IO ()
 precluster = do
-    putStrLn ">> -c : Entire database to graph"
-    input <- getLine
-    case input of
-        "-c" -> convertDatabase
-        _    -> return ()
+    putStrLn ">> Converting..."
+    textToGraph
+
+
 
 runNounVisualization :: IO ()
 runNounVisualization = runCluster "user"

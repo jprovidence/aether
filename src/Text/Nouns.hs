@@ -20,9 +20,10 @@ import Database.HDBC.PostgreSQL
 import Network.Socket
 import Foreign.Storable
 import Foreign.Marshal.Alloc
-import Feed
 import Entry
 import Viterbi
+import Utility
+import Feed
 
 
 ----------------------------------------------------------------------------------------------------
@@ -75,13 +76,6 @@ data ClusterConfiguration = CC { _attrF :: ForceFunc
                                , _verts :: Table Int Point2D
                                }
 
-
-----------------------------------------------------------------------------------------------------
-
--- Database connection parameters (Password altered for github)
-
-connStr :: String
-connStr = "host=localhost dbname=ticket connect_timeout=7 port=5432 user=postgres password=password"
 
 
 ----------------------------------------------------------------------------------------------------
@@ -430,10 +424,6 @@ confirmExit = do
     getLine >>= return . read
 
 
-affirmative :: String -> Bool
-affirmative str = (str == "y") || (str == "Y")
-
-
 
 enterClusterCycle :: Chan (Table Int Point2D) ->
                     ClusterConfiguration     ->
@@ -622,7 +612,6 @@ cacheEdges = do
     let sel = "select id from vertex;"
     allIds <- vertexIds
     htbl <- M.new
-    mvar <- newEmptyMVar
     mapM_ (\id -> relationSummary' id allIds >>= M.insert htbl id) allIds
     return htbl
 
