@@ -45,7 +45,6 @@ processUsrCommands = do
         "-nvis" -> runNounVisualization
         "-testTextSim" -> testTextSim
         "-testViterbi" -> testViterbi
-        "-testNouns" -> testNouns
         _    -> putStrLn ">> Sorry, your input was not recognised, please try again." >>
                processUsrCommands
     putStrLn "\n>> Would you like to do anything else? Y/n"
@@ -67,7 +66,6 @@ printHelp = do
     putStrLn ">> -nvis : Run noun visualizations"
     putStrLn ">> -testViterbi : Run tests of the viterbi algorithm"
     putStrLn ">> -testTextSim : Run tests of text similarity functions"
-    putStrLn ">> -testNouns : Run tests of the noun clustering functions"
 
 
 
@@ -174,14 +172,5 @@ testTextSim = do
     putStrLn ">> invCountRelative byIntersection euclideanDistance"
     sim <- vbaSimilarityVit vit textA textB invCountRelative byIntersection euclideanDistance
     putStrLn $ show sim
-
-
-
-testNouns :: IO ()
-testNouns = do
-    testInitialPositioning
-
-testInitialPositioning :: IO ()
-testInitialPositioning = putStrLn $ show $ initialPositioning 10.0 111
 
 

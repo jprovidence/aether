@@ -3,6 +3,7 @@ module Utility (
 ,   transact
 ,   affirmative
 ,   connStr
+,   pythagoras
 ) where
 
 import Database.HDBC
@@ -49,3 +50,10 @@ wrap func = do
 affirmative :: String -> Bool
 affirmative str = (str == "y") || (str == "Y")
 
+
+----------------------------------------------------------------------------------------------------
+
+-- hypotenuse right angled triangle
+
+pythagoras :: Float -> Float -> Float
+pythagoras a b = sqrt ((a^2) + (b^2))

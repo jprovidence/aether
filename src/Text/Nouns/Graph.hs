@@ -1,5 +1,11 @@
 module Text.Nouns.Graph (
     textToGraph
+,   representGraph
+,   Point2D
+,   Vertices
+,   Edges
+,   Strength(Strength, target, strength)
+,   RelationSummary(Summary, related, unrelated)
 ) where
 
 
@@ -17,6 +23,10 @@ import Entry
 import Feed
 import Viterbi
 
+
+----------------------------------------------------------------------------------------------------
+
+-- Document-Graph conversion
 
 ----------------------------------------------------------------------------------------------------
 
@@ -450,4 +460,221 @@ insertEdge cache (vtxa, vtxb) edata =
             M.insert cache vtxa inner
 
 
+
+
 ----------------------------------------------------------------------------------------------------
+
+-- Haskell Representation of Graph
+
+----------------------------------------------------------------------------------------------------
+
+-- typedefs
+
+-- Point2D, a simple tuple to represent a point in a 2-d space.
+-- Verticies
+
+type Point2D = (Float, Float)
+type Vertices = Table Int Point2D
+type Edges = Table Int RelationSummary
+
+
+----------------------------------------------------------------------------------------------------
+
+-- data type to summarize a single relationship
+
+data Strength = Strength { target   :: Int
+                         , strength :: Int
+                         } deriving Show
+
+
+----------------------------------------------------------------------------------------------------
+
+-- data type to summarize edges on a vertex
+
+data RelationSummary = Summary { related  :: [Strength]
+                               , unrelated :: [Int]
+                               } deriving Show
+
+
+----------------------------------------------------------------------------------------------------
+
+-- coordinate building a haskell representation of the noun-graph
+
+representGraph :: String -> IO (Float, Vertices, Edges)
+representGraph isUser = do
+
+    -- collect necessary information
+    numPts <- numVertices
+    dimen <- case isUser of
+                 "user" -> askDimenSize
+                 "comp" -> return 1000
+    let pts = initialPositioning dimen numPts
+    ids <- allVertexIds
+
+    -- build representations
+    verts <- representVertices pts ids
+    edges <- representEdges ids
+
+    return (dimen, verts, edges)
+
+
+---------------------------------------------------------------------------------------------------
+
+-- ask user for perferred dimension size
+
+askDimenSize :: IO Float
+askDimenSize = do
+    putStrLn ">> Enter a figure for the cluster-space size."
+    getLine >>= return . read
+
+
+---------------------------------------------------------------------------------------------------
+
+-- number of vertices in the graph
+
+numVertices :: IO Int
+numVertices = let sel = "select count(id) from vertex;"
+              in wrap (\c -> quickQuery' c sel [] >>= return . fromSql . flip (!!) 0 . L.concat)
+
+
+---------------------------------------------------------------------------------------------------
+
+-- the id of each vertex in the database-graph
+
+allVertexIds :: IO [Int]
+allVertexIds = let sel = "select id from vertex;"
+               in wrap (\c -> quickQuery' c sel [] >>= return . L.map fromSql . L.concat)
+
+
+---------------------------------------------------------------------------------------------------
+
+-- list of all edges in the database-graph
+
+allEdges :: IO [(Int, Int, Int)]
+allEdges = do
+    let sel = "select * from edge;"
+        deSql (a, b, c) = (fromSql a, fromSql b, fromSql c)
+    rows <- wrap (\c -> quickQuery' c sel [])
+    return $ L.map (\row -> deSql (row !! 1, row !! 2, row !! 3)) rows
+
+
+---------------------------------------------------------------------------------------------------
+
+-- construct haskell representation of graph vertices
+
+representVertices :: [Point2D] -> [Int] -> IO Vertices
+representVertices pts ids = M.fromList $ L.zip ids pts
+
+
+---------------------------------------------------------------------------------------------------
+
+-- contruct haskell representation of graph edges
+
+representEdges :: [Int] -> IO Edges
+representEdges ids = do
+    tbl <- M.new
+    mapM_ (representEdge tbl ids) ids
+    return tbl
+
+representEdge :: Edges -> [Int] -> Int -> IO ()
+representEdge tbl allIds id = do
+    let sela = "select nodeb,score from edge where nodea=" ++ (show id) ++ ";"
+        selb = "select nodea,score from edge where nodeb=" ++ (show id) ++ ";"
+        toStren lst = Strength (fromSql $ lst !! 0) (fromSql $ lst !! 1)
+    res <- wrap (\c -> quickQuery' c sela [] >>= \ra -> quickQuery' c selb [] >>= \rb -> return (ra, rb))
+    rel <- return ((fst res) ++ (snd res)) >>= return . L.map toStren
+    let blacklist = L.map target rel
+        unrel = L.filter (\x -> not (x `L.elem` blacklist)) allIds
+    M.insert tbl id $ Summary rel unrel
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Builds the sections of the edge-table detailing related vertices from a list of relations
+-- If vertex does not exist, do a plain insert. If it does, add the new edge to the existing list.
+-- This is essentially an '#insertWith'.
+
+carefulInsert :: Edges -> (Int, Int, Int) -> IO ()
+carefulInsert tbl (fr, to, sc) = do
+    exists <- M.lookup tbl fr
+    case exists of
+        Just rel -> do
+            strn <- return $ [(Strength to sc)] ++ (related rel)
+            summ <- return $ Summary strn $ unrelated rel
+            M.insert tbl fr summ
+        Nothing  -> M.insert tbl fr $ Summary [(Strength to sc)] []
+
+
+----------------------------------------------------------------------------------------------------
+
+-- discovers all vertices not related to the target (@fr@) by subtracting the list of all vertices
+-- (@ids@) from the list of those with a relation to the target (@summ@)
+
+completeEdge :: [Int] -> (Int, RelationSummary) -> IO RelationSummary
+completeEdge ids (fr, summ) = do
+    let blacklist = L.map target $ related summ  -- disregard strengths
+    unrelated <- return $ L.filter (\x -> not (x `L.elem` blacklist)) ids
+    return $ Summary (related summ) unrelated
+
+
+----------------------------------------------------------------------------------------------------
+
+-- build a pseudo-grid (@len@ x @len@) of points given the total number of points total
+
+initialPositioning :: Float -> Int -> [Point2D]
+initialPositioning len numPts =
+    let rt = sqrt $ fromIntegral numPts
+        rndUp = ceiling rt
+        rndDwn = floor rt
+    in L.concat $ case rndUp == rndDwn of
+                      True  -> coordsPerfectSq len rndUp
+                      False -> coordsMismatch numPts len rndDwn rndUp
+
+
+----------------------------------------------------------------------------------------------------
+
+-- construct the pseudo-grid when an integer square can be taken of the number of points
+
+coordsPerfectSq :: Float -> Int -> [[Point2D]]
+coordsPerfectSq len bound =
+    let mod = len / (fromIntegral bound)
+        coords = take bound [ mod * i | i <- [0..] ]
+    in L.map (L.zip coords . L.repeat) coords
+
+
+----------------------------------------------------------------------------------------------------
+
+-- construct the pseudo-grid when an integer square cannot be taken of then number of points
+
+coordsMismatch :: Int -> Float -> Int -> Int -> [[Point2D]]
+coordsMismatch pts len rndDown rndUp
+    | willOverflow pts rndUp =
+        let mod = len / (fromIntegral rndUp)
+            coords = take rndUp [ mod * i | i <- [0..] ]
+
+            -- final row
+            countF = pts - (rndUp * (rndUp - 1))
+            modF = len / (fromIntegral countF)
+            coordsF = take countF [ modF * i | i <- [0..] ]
+
+        in (L.map (zip coords . repeat) $ L.init coords) ++ [(zip coordsF (repeat $ L.last coords))]
+
+    | otherwise =
+        let modX = len / (fromIntegral rndDown)
+            modY = len / (fromIntegral rndUp)
+            coordsX = take rndDown [ modX * i | i <- [0..] ]
+            coordsY = take rndUp [ modY * i | i <- [0..] ]
+
+            -- final row
+            countF = pts - (rndDown^2)
+            modF = len / (fromIntegral countF)
+            coordsFX = take countF [ modF * i | i <- [0..] ]
+
+        in (L.map (zip coordsX . repeat) $ L.init coordsY) ++ [(zip coordsFX (repeat $ L.last coordsY))]
+
+
+    where willOverflow :: Int -> Int -> Bool
+          willOverflow pts u = pts > (u * (u - 1))
+
+
+---------------------------------------------------------------------------------------------------
