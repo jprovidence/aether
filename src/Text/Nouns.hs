@@ -1,42 +1,66 @@
 module Text.Nouns (
-    runCluster
+    ByteString
+,   Table
+,   Chart
+,   ForceFunc(ForceFunc, applyF)
+,   ClusterConfiguration(CC, _attrF, _replF, _edges, _verts)
+,   SpringClusterConfiguration(SCC, _selFunc, _sprFunc, _replFunc, _dimen, _restDist)
+,   VertexCache
+,   EdgeCache
+,   DBStatus(Update, Create)
+,   VertexData(VData, vid, vcount, vstatus)
+,   EdgeData(EData, eid, escore, estatus)
+,   VFunc(VFunc, runV)
+,   EFunc(EFunc, runE)
+,   Point2D
+,   Point3D
+,   Vertices
+,   Vertices3D
+,   Edges
+,   Strength(Strength, target, strength)
+,   RelationSummary(Summary, related, unrelated)
+,   SpringFunc(SFunc, runS)
+,   ReplFunc(RFunc, runR)
 ) where
 
 
-import Data.Maybe
-import Data.Int
-import qualified Data.List as L
 import qualified Data.ByteString.Char8 as B
 import qualified Data.HashTable.IO as M
-import Control.Exception
-import Control.Monad
-import Control.Concurrent
-import Control.Concurrent.Chan
-import System.IO
-import Database.HDBC
-import Database.HDBC.PostgreSQL
-import Network.Socket
-import Foreign.Storable
-import Foreign.Marshal.Alloc
-import Entry
-import Viterbi
-import Utility
-import Text.Nouns.Graph
 
+
+----------------------------------------------------------------------------------------------------
+
+-- Datatypes, Universal
+
+----------------------------------------------------------------------------------------------------
+
+type ByteString = B.ByteString
+type Table k v = M.CuckooHashTable k v
+
+
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Datatypes, Simple Force Cluster
 
 ----------------------------------------------------------------------------------------------------
 
 -- typedefs
 
-type ByteString = B.ByteString
-type Table k v = M.CuckooHashTable k v
 type Chart = Table ByteString [(ByteString, Int)]
 
 
 ----------------------------------------------------------------------------------------------------
 
+--
+
 newtype ForceFunc = ForceFunc { applyF :: (Int -> Float -> Float) }
 
+
+----------------------------------------------------------------------------------------------------
+
+--
 
 data ClusterConfiguration = CC { _attrF :: ForceFunc
                                , _replF :: ForceFunc
@@ -46,335 +70,126 @@ data ClusterConfiguration = CC { _attrF :: ForceFunc
 
 
 
-----------------------------------------------------------------------------------------------------
-
--- Clustering interface
 
 ----------------------------------------------------------------------------------------------------
 
---
+-- Datatypes, Document-Graph conversion
 
-runCluster :: String -> IO ()
-runCluster src = do
-    (dimen, verts, edges) <- representGraph src
-    case src of
-        "user" -> do
-            chan <- prepVisualOut
-            runCluster' chan dimen src edges verts
-        _ -> do
-            return ()
+----------------------------------------------------------------------------------------------------
 
 
-runCluster' :: Chan Vertices -> Float -> String -> Edges -> Vertices -> IO ()
-runCluster' chan dimen src edges verts =
-    case src of
-        "user" -> do
-            (attrF, replF) <- userConfigureForces dimen
-            config <- return $ CC attrF replF edges verts
-            enterClusterCycle chan config 0
-            stat <- confirmExit
-            case stat of
-                0 -> runCluster src
-                1 -> runCluster' chan dimen src edges verts
-                2 -> return ()
+-- typedefs
 
-        _      -> do
-            return ()
-
-
-prepVisualOut :: IO (Chan (Table Int Point2D))
-prepVisualOut = do
-    chan <- newChan
-    forkIO (waitVisualizationReq chan)
-    return chan
-
-
-userConfigureForces :: Float -> IO (ForceFunc, ForceFunc)
-userConfigureForces dimen = do
-    putStrLn ">> Enter a value for the max-move divisor."
-    putStrLn (">> Note: Current cluster-space size is " ++ (show dimen) ++ ".")
-    moveDivisor <- getLine >>= return . read
-
-    moveMax <- return $ dimen / moveDivisor
-    scMax <- scoreMax
-
-    putStrLn ">> Enter a value for the repulsion threshold."
-    repulThresh <- getLine >>= return . read
-
-    modA <- buildForce "Attractive"
-    modR <- buildForce "Repulsive"
-
-    attrF <- return $ configAttractiveMod modA dimen moveMax scMax
-    replF <- return $ configRepulsiveMod modR moveMax repulThresh
-    return (attrF, replF)
-
-
-buildForce :: String -> IO (Float -> Float -> Float)
-buildForce str = do
-    putStrLn (">> How would you like to modulate " ++ str ++ " Forces?")
-    putStrLn ">> 1 : Greater with distance."
-    putStrLn ">> 2 : Lesser with distance."
-    partA <- getLine >>= return . read
-    putStrLn (">> Which function type should be used to modulate " ++ str ++ " Forces?")
-    putStrLn ">> 1 : Linear"
-    putStrLn ">> 2 : Exponential"
-    putStrLn ">> 3 : Fractinal exponential"
-    partB <- getLine >>= return . read
-    return $ case (partA, partB) of
-                 (1, 1) -> linearGD
-                 (1, 2) -> exponentialGD
-                 (1, 3) -> fracExponentialGD
-                 (2, 1) -> linearLD
-                 (2, 2) -> exponentialLD
-                 (2, 3) -> fracExponentialLD
-
-
-confirmExit :: IO Int
-confirmExit = do
-    putStrLn ">> Enter one of the following numbers to continue."
-    putStrLn ">> 0 : Run another cluster, update all cached data."
-    putStrLn ">> 1 : Run another cluster, use existing cache."
-    putStrLn ">> 2 : Exit"
-    getLine >>= return . read
-
-
-
-enterClusterCycle :: Chan Vertices -> ClusterConfiguration -> Int -> IO ()
-enterClusterCycle chan config count =
-     case count == 100 of
-        True -> do
-            putStrLn ">> 100 cycles completed, continue? y/n"
-            input <- getLine
-            case affirmative input of
-                True  -> enterClusterCycle chan config 0
-                False -> return ()
-
-        False -> do
-            let (e, v, a, r) = ((_edges config), (_verts config), (_attrF config), (_replF config))
-            reportNewPositions chan v
-            newVerts <- clusterCycle e v a r
-            enterClusterCycle chan (CC a r e newVerts) (count + 1)
+type VertexCache = Table ByteString VertexData
+type EdgeCache = Table ByteString (Table ByteString EdgeData)
 
 
 ----------------------------------------------------------------------------------------------------
 
--- apply all forces to each vertex once
+-- data type to indicate whether a particular record must be updated or inserted to the database
+-- upon completion of graph-conversion
 
-clusterCycle :: Edges -> Vertices -> ForceFunc -> ForceFunc -> IO Vertices
-clusterCycle edges verts attrF replF = do
-    newVerts <- M.new
-    edgeList <- M.toList edges
-    mapM_ (\edj -> reposition newVerts verts edj attrF replF) edgeList
-    return newVerts
+data DBStatus = Update
+              | Create
+    deriving Show
 
 
 ----------------------------------------------------------------------------------------------------
 
--- reposition a vertex according to the forces acting upon it
+-- data type to represent the state (or future state) of a given vertex in the database
 
-reposition :: Vertices -> Vertices -> (Int, RelationSummary) -> ForceFunc -> ForceFunc -> IO ()
-reposition tbl verts (id, rcache) attrF repulF = do
-    let cleanLookup x = liftM fromJust $ M.lookup verts x
-
-    curPos <- cleanLookup id
-
-    rels <- mapM (prepCache verts) $ related rcache
-    unrels <- mapM cleanLookup (unrelated rcache) >>= \xs -> return $ L.zip xs $ repeat 0
-
-    tempPos <- return $ L.foldl' release curPos $ L.map (coil attrF) rels
-    finalPos <- return $ L.foldl' release tempPos $ L.map (coil repulF) unrels
-
-    M.insert tbl id finalPos
-
-    where prepCache :: Vertices -> Strength -> IO (Point2D, Int)
-          prepCache tbl s = M.lookup tbl (target s) >>= \pt -> return (fromJust pt, strength s)
-
-          coil :: ForceFunc -> (Point2D, Int) -> (Point2D -> Point2D)
-          coil ff (pt, scr) = applyForce scr ff pt
-
-          release :: Point2D -> (Point2D -> Point2D) -> Point2D
-          release acc f = f acc
+data VertexData = VData { vid     :: Int
+                        , vcount  :: Int
+                        , vstatus :: DBStatus
+                        } deriving Show
 
 
 ----------------------------------------------------------------------------------------------------
 
--- calculate the new position of a vertex
+-- data type to represent the state (or future state) of a given edge in the database
 
-applyForce :: Int -> ForceFunc -> Point2D -> Point2D -> Point2D
-applyForce score (ForceFunc ff) (xa, ya) (xb, yb) =
-    let curDist = pythagoras (xa - xb) (ya - yb)
-        move = ff score curDist
-    in case move == 0 of
-           True  -> (xb, yb)
-           False -> makePt move (xa, ya) (ya, yb)
-
-    where makePt :: Float -> (Float, Float) -> (Float, Float) -> Point2D
-          makePt move (xa, ya) (xb, yb) =
-              let (xz, yz) = ((move * (xa - xb)) + xb, (move * (ya - yb)) + yb)
-              in (sanitize xz, sanitize yz)
-
-          sanitize :: Float -> Float
-          sanitize = lwrBnd . uprBnd
-
-          uprBnd x = case (x > 1000.0) of
-                           False -> x
-                           True  -> 1000.0
-
-          lwrBnd x = case (x < 0.0) of
-                         False -> x
-                         True  -> 0.0
+data EdgeData = EData { eid     :: Int
+                      , escore  :: Int
+                      , estatus :: DBStatus
+                      } deriving Show
 
 
 ----------------------------------------------------------------------------------------------------
 
--- configure a repulsive force function for easy passing
+-- function that will be partially applied with information regarding updates to a vertex. Will fire
+-- when the VertexCache is in scope and can be applied
 
-configRepulsiveMod :: (Float -> Float -> Float) -> Float -> Float -> ForceFunc
-configRepulsiveMod f moveMax thresh = ForceFunc (modRepulsiveForce f moveMax thresh)
-
-
-----------------------------------------------------------------------------------------------------
-
--- configure an attractive force function for easy passing
-
-configAttractiveMod :: (Float -> Float -> Float) -> Float -> Float -> Int -> ForceFunc
-configAttractiveMod f dimen moveMax scoreMax =
-    ForceFunc (modAttractiveForce f dimen moveMax scoreMax)
+newtype VFunc = VFunc { runV :: (VertexCache -> IO ()) }
 
 
 ----------------------------------------------------------------------------------------------------
 
--- modulate the repulsive move according to a linear function
+-- same as EFunc, for edge data instead. Note: all VFuncs generated during a conversion must be
+-- fired before EFuncs will evaluate correctly
 
-modRepulsiveForce :: (Float -> Float -> Float) -> Float -> Float -> Int -> Float -> Float
-modRepulsiveForce f moveMax thresh _ dist =
-    let trespass = f dist thresh
-    in case dist < thresh of
-           False -> 0
-           True  -> trespass * moveMax
-
-
-----------------------------------------------------------------------------------------------------
-
--- modulate the attractive force on a vertex according to distance and the chosen mod function
-
-modAttractiveForce :: (Float -> Float -> Float) -> Float -> Float -> Int -> Int -> Float -> Float
-modAttractiveForce f dimen moveMax scoreMax score dist =
-    let fscore = fromIntegral score
-        fscoreMax = fromIntegral scoreMax
-        naiveMove = (fscore / fscoreMax) * moveMax   -- move distance before modulation
-        scHypotenuse = sqrt ((dimen^2) + (dimen^2))  -- greatest dist possible
-        moveMultiplier = f dist scHypotenuse         -- apply modulating function
-
-    in naiveMove * moveMultiplier
-
-
-----------------------------------------------------------------------------------------------------
-
--- modulating function for attractive forces, linear
-
-linearGD :: Float -> Float -> Float
-linearGD a b = a / b
-
-
-linearLD :: Float -> Float -> Float
-linearLD a b = 1 - (linearGD a b)
-
-
-----------------------------------------------------------------------------------------------------
-
--- modulating function for attractive forces, exponential
-
-exponentialGD :: Float -> Float -> Float
-exponentialGD a b = (a^2) / (b^2)
-
-
-exponentialLD :: Float -> Float -> Float
-exponentialLD a b = 1 - (exponentialGD a b)
-
-----------------------------------------------------------------------------------------------------
-
--- modulating function for repulsive forces, opposite exponential
-
-fracExponentialGD :: Float -> Float -> Float
-fracExponentialGD a b = 1 - (fracExponentialLD a b)
-
-
-fracExponentialLD :: Float -> Float -> Float
-fracExponentialLD a b = (sqrt a) / (sqrt b)
-
-
-----------------------------------------------------------------------------------------------------
-
--- determine the highest current relation score
-
-scoreMax :: IO Int
-scoreMax = let sel = "select score from edge order by score desc limit 1;"
-               max = wrap (\c -> quickQuery' c sel [] >>= return . fromSql . flip (!!) 0 . L.concat)
-           in  liftM fromJust max
+newtype EFunc = EFunc { runE :: (EdgeCache -> IO ()) }
 
 
 
 
 ----------------------------------------------------------------------------------------------------
 
--- Visualization Out
+-- Datatypes, Simple Force Cluster graph representation
 
 ----------------------------------------------------------------------------------------------------
 
---
+-- typedefs
 
-reportNewPositions :: Chan (Table Int Point2D) -> Table Int Point2D -> IO ()
-reportNewPositions chan tbl = writeChan chan tbl
+-- Point2D, a simple tuple to represent a point in a 2-d space.
+-- Verticies
+
+type Point2D = (Float, Float)
+type Vertices = Table Int Point2D
+type Edges = Table Int RelationSummary
 
 
 ----------------------------------------------------------------------------------------------------
 
---
+-- data type to summarize a single relationship
 
-waitVisualizationReq :: Chan (Table Int Point2D) -> IO ()
-waitVisualizationReq chan = do
-    --putStrLn ">> Visualizations now available"
-    addrinfo <- getAddrInfo (Just (defaultHints {addrFlags = [AI_PASSIVE]})) Nothing (Just "8000")
-    servaddr <- return $ head addrinfo
-    sock <- socket (addrFamily servaddr) Stream defaultProtocol
-    bindSocket sock (addrAddress servaddr)
-    listen sock 10
-    serve chan sock
+data Strength = Strength { target   :: Int
+                         , strength :: Int
+                         } deriving Show
 
 
-serve :: Chan (Table Int Point2D) -> Socket -> IO ()
-serve chan sock = do
-    (connSock, cliAddr) <- accept sock
-    forkIO (visualize chan connSock)
-    serve chan sock
+----------------------------------------------------------------------------------------------------
 
+-- data type to summarize edges on a vertex
 
-visualize :: Chan (Table Int Point2D) -> Socket -> IO ()
-visualize chan sock = do
-    verts <- readChan chan
-    listv <- M.toList verts
-    listlen <- return $ L.length listv
-    h <- socketToHandle sock ReadWriteMode
-    hSetBinaryMode h True
-    writeBytes 4 h ((fromIntegral listlen) :: Int32)
-    mapM_ (writePoint h) listv
-    hClose h
-
-
-writePoint :: Handle -> (Int, Point2D) -> IO ()
-writePoint h (id, (a, b)) =
-    writeBytes 4 h ((fromIntegral id) :: Int32) >>
-    writeBytes 4 h ((truncate a) :: Int32) >>
-    writeBytes 4 h ((truncate b) :: Int32)
-
--- Writes an object @obj@ of size @nBytes@ to the file handle @h@
-
-writeBytes :: (Storable a) => Int -> Handle -> a -> IO ()
-writeBytes nBytes h obj =
-    mallocBytes nBytes >>= \ptr -> poke ptr obj >> hPutBuf h ptr nBytes >> free ptr
+data RelationSummary = Summary { related  :: [Strength]
+                               , unrelated :: [Int]
+                               } deriving Show
 
 
 
+
+----------------------------------------------------------------------------------------------------
+
+-- Datatypes, Spring graph representation
+
+----------------------------------------------------------------------------------------------------
+
+-- typedefs
+
+type Point3D = (Float, Float, Float)
+type Vertices3D = Table Int Point3D
+
+
+data SpringClusterConfiguration = SCC { _selFunc  :: ([Float] -> Int -> [String])
+                                      , _sprFunc  :: SpringFunc
+                                      , _replFunc :: ReplFunc
+                                      , _dimen    :: Int
+                                      , _restDist :: Int
+                                      }
+
+
+newtype SpringFunc = SFunc { runS :: (Int -> Point3D -> Point3D -> Point3D) }
+
+newtype ReplFunc = RFunc { runR :: (Point3D -> Point3D -> Point3D) }
 
 

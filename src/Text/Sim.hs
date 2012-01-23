@@ -89,7 +89,7 @@ newtype DistanceF = DistanceF (Map ByteString (Float, Float) -> Score)
 vbaSimilarityVit :: Vit -> String -> String -> TallyF -> DimensionF -> DistanceF -> IO Score
 vbaSimilarityVit vit a b (TallyF tallyf) (DimensionF dimenf) (DistanceF distf) =
     let getSim x y = return (dimenf x y) >>= return . distf
-        calcScore x = tag vit (B.pack x) >>= nouns >>= return . tallyf
+        calcScore x = withFilter (tag vit) (B.pack x) >>= nouns >>= return . tallyf
         scores = sweep (calcScore a, calcScore b)
     in scores >>= \(sa, sb) -> (forceMap sa) `par` ((forceMap sb) `pseq` (getSim sa sb))
 

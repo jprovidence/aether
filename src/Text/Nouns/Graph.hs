@@ -1,11 +1,16 @@
 module Text.Nouns.Graph (
     textToGraph
 ,   representGraph
-,   Point2D
-,   Vertices
-,   Edges
-,   Strength(Strength, target, strength)
-,   RelationSummary(Summary, related, unrelated)
+,   buildEdgeCache
+,   buildVertexCache
+,   graphToTulip
+,   graphToTulip'
+,   initializeSpringCluster
+,   noScoreFilter
+,   scLessThan
+,   scGreaterThan
+,   withinNDeviations
+,   allScores
 ) where
 
 
@@ -19,6 +24,8 @@ import Control.Concurrent.STM
 import Control.Concurrent.STM.TChan
 import Database.HDBC
 import Database.HDBC.PostgreSQL
+import Text.Nouns
+import Text.Nouns.Visualization
 import Entry
 import Feed
 import Viterbi
@@ -27,62 +34,6 @@ import Viterbi
 ----------------------------------------------------------------------------------------------------
 
 -- Document-Graph conversion
-
-----------------------------------------------------------------------------------------------------
-
--- typedefs
-
-type ByteString = B.ByteString
-type Table k v = M.CuckooHashTable k v
-type VertexCache = Table ByteString VertexData
-type EdgeCache = Table ByteString (Table ByteString EdgeData)
-
-
-----------------------------------------------------------------------------------------------------
-
--- data type to indicate whether a particular record must be updated or inserted to the database
--- upon completion of graph-conversion
-
-data DBStatus = Update
-              | Create
-    deriving Show
-
-
-----------------------------------------------------------------------------------------------------
-
--- data type to represent the state (or future state) of a given vertex in the database
-
-data VertexData = VData { vid     :: Int
-                        , vcount  :: Int
-                        , vstatus :: DBStatus
-                        } deriving Show
-
-
-----------------------------------------------------------------------------------------------------
-
--- data type to represent the state (or future state) of a given edge in the database
-
-data EdgeData = EData { eid     :: Int
-                      , escore  :: Int
-                      , estatus :: DBStatus
-                      } deriving Show
-
-
-----------------------------------------------------------------------------------------------------
-
--- function that will be partially applied with information regarding updates to a vertex. Will fire
--- when the VertexCache is in scope and can be applied
-
-newtype VFunc = VFunc { runV :: (VertexCache -> IO ()) }
-
-
-----------------------------------------------------------------------------------------------------
-
--- same as EFunc, for edge data instead. Note: all VFuncs generated during a conversion must be
--- fired before EFuncs will evaluate correctly
-
-newtype EFunc = EFunc { runE :: (EdgeCache -> IO ()) }
-
 
 ----------------------------------------------------------------------------------------------------
 
@@ -152,7 +103,7 @@ buildEdgeCache = do
     where selectAll :: Connection -> IO [(Int, Int, Int, Int)]
           selectAll con = do
               let sel = "select * from edge;"
-                  deSql (a, b, d, c) = (fromSql a, fromSql b, fromSql c, fromSql d)
+                  deSql (a, b, c, d) = (fromSql a, fromSql b, fromSql c, fromSql d)
               rows <- quickQuery' con sel []
               return $ L.map (\r -> deSql (r !! 0, r !! 1, r !! 2, r !! 3)) rows
 
@@ -314,7 +265,7 @@ feedsToGraph vchan echan exit vit feeds = do
 
 entryToGraph :: TChan VFunc -> TChan EFunc -> Vit -> ByteString -> IO ()
 entryToGraph vchan echan vit doc = do
-    tagd <- tag vit doc >>= nounsAndIndices
+    tagd <- withFilter (tag vit) doc >>= nounsAndIndices
     tlen <- return $ L.length tagd
     return (L.map coilVFunc tagd) >>= mapM_ (atomically . writeTChan vchan)
     return (integrate [] tagd 0 tlen) >>= return . L.map coilEFunc >>= mapM_ (atomically . writeTChan echan)
@@ -464,37 +415,7 @@ insertEdge cache (vtxa, vtxb) edata =
 
 ----------------------------------------------------------------------------------------------------
 
--- Haskell Representation of Graph
-
-----------------------------------------------------------------------------------------------------
-
--- typedefs
-
--- Point2D, a simple tuple to represent a point in a 2-d space.
--- Verticies
-
-type Point2D = (Float, Float)
-type Vertices = Table Int Point2D
-type Edges = Table Int RelationSummary
-
-
-----------------------------------------------------------------------------------------------------
-
--- data type to summarize a single relationship
-
-data Strength = Strength { target   :: Int
-                         , strength :: Int
-                         } deriving Show
-
-
-----------------------------------------------------------------------------------------------------
-
--- data type to summarize edges on a vertex
-
-data RelationSummary = Summary { related  :: [Strength]
-                               , unrelated :: [Int]
-                               } deriving Show
-
+-- Simple Force Cluster, Representation of Graph
 
 ----------------------------------------------------------------------------------------------------
 
@@ -520,6 +441,32 @@ representGraph isUser = do
 
 ---------------------------------------------------------------------------------------------------
 
+-- create tulip data for visualization
+
+graphToTulip :: IO ()
+graphToTulip = do
+
+    -- background information
+    numPts <- numVertices
+    ids <- allVertexIds
+
+    -- data structures
+    vc <- buildVertexCache
+    ec <- representEdges ids
+
+    -- generate csv
+    graphToTulipCSV vc ec
+
+
+graphToTulip' :: IO ()
+graphToTulip' = do
+    vc <- buildVertexCache
+    ec <- buildEdgeCache
+    graphToTulipCSVDesc vc ec
+
+
+----------------------------------------------------------------------------------------------------
+
 -- ask user for perferred dimension size
 
 askDimenSize :: IO Float
@@ -528,7 +475,7 @@ askDimenSize = do
     getLine >>= return . read
 
 
----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
 
 -- number of vertices in the graph
 
@@ -537,7 +484,7 @@ numVertices = let sel = "select count(id) from vertex;"
               in wrap (\c -> quickQuery' c sel [] >>= return . fromSql . flip (!!) 0 . L.concat)
 
 
----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
 
 -- the id of each vertex in the database-graph
 
@@ -546,7 +493,7 @@ allVertexIds = let sel = "select id from vertex;"
                in wrap (\c -> quickQuery' c sel [] >>= return . L.map fromSql . L.concat)
 
 
----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
 
 -- list of all edges in the database-graph
 
@@ -558,7 +505,7 @@ allEdges = do
     return $ L.map (\row -> deSql (row !! 1, row !! 2, row !! 3)) rows
 
 
----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
 
 -- construct haskell representation of graph vertices
 
@@ -566,7 +513,7 @@ representVertices :: [Point2D] -> [Int] -> IO Vertices
 representVertices pts ids = M.fromList $ L.zip ids pts
 
 
----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
 
 -- contruct haskell representation of graph edges
 
@@ -586,23 +533,6 @@ representEdge tbl allIds id = do
     let blacklist = L.map target rel
         unrel = L.filter (\x -> not (x `L.elem` blacklist)) allIds
     M.insert tbl id $ Summary rel unrel
-
-
-----------------------------------------------------------------------------------------------------
-
--- Builds the sections of the edge-table detailing related vertices from a list of relations
--- If vertex does not exist, do a plain insert. If it does, add the new edge to the existing list.
--- This is essentially an '#insertWith'.
-
-carefulInsert :: Edges -> (Int, Int, Int) -> IO ()
-carefulInsert tbl (fr, to, sc) = do
-    exists <- M.lookup tbl fr
-    case exists of
-        Just rel -> do
-            strn <- return $ [(Strength to sc)] ++ (related rel)
-            summ <- return $ Summary strn $ unrelated rel
-            M.insert tbl fr summ
-        Nothing  -> M.insert tbl fr $ Summary [(Strength to sc)] []
 
 
 ----------------------------------------------------------------------------------------------------
@@ -677,4 +607,106 @@ coordsMismatch pts len rndDown rndUp
           willOverflow pts u = pts > (u * (u - 1))
 
 
----------------------------------------------------------------------------------------------------
+
+
+----------------------------------------------------------------------------------------------------
+
+-- Spring Cluster, Representation of graph
+
+----------------------------------------------------------------------------------------------------
+
+
+initializeSpringCluster :: SpringClusterConfiguration -> IO (Edges, Vertices3D)
+initializeSpringCluster scc = do
+    scores <- allScores >>= return . L.map fromIntegral
+    es <- selectEdges (_selFunc scc) scores
+    vs <- selectVerts (_dimen scc)
+    return (es, vs)
+
+
+selectEdges :: ([Float] -> Int -> [String]) -> [Float] -> IO Edges
+selectEdges func scores = do
+    tbl <- M.new
+    ids <- allVertexIds
+    mapM_ (selectProxy tbl ids) ids
+    return tbl
+
+    where selectProxy tbl ids id = let sels = func scores id
+                                       sela = sels !! 0
+                                       selb = sels !! 1
+                                   in selectEdge tbl ids sela selb id
+
+
+selectEdge :: Edges -> [Int] -> String -> String -> Int -> IO ()
+selectEdge tbl allIds sela selb id = do
+    let toStren lst = Strength (fromSql $ lst !! 0) (fromSql $ lst !! 1)
+    res <- wrap (\c -> quickQuery' c sela [] >>= \ra -> quickQuery' c selb [] >>= \rb -> return (ra, rb))
+    rel <- return ((fst res) ++ (snd res)) >>= return . L.map toStren
+    let blacklist = L.map target rel
+        unrel = L.filter (\x -> not (x `L.elem` blacklist)) allIds
+    M.insert tbl id $ Summary rel unrel
+
+
+selectVerts :: Int -> IO Vertices3D
+selectVerts dimen = do
+    nverts <- numVertices
+    ids <- allVertexIds
+    initialPositioning3D ids dimen nverts
+
+
+noScoreFilter :: [Float] -> Int -> [String]
+noScoreFilter _ id = [("select nodeb,score from edge where nodea=" ++ (show id) ++ ";"),
+                      ("select nodea,score from edge where nodeb=" ++ (show id) ++ ";")]
+
+
+scLessThan :: Int -> [Float] -> Int -> [String]
+scLessThan i _ id =
+    [("select nodeb,score from edge where id=" ++ (show id) ++ " and score<" ++ (show i) ++ ";"),
+     ("select nodea,score from edge where id=" ++ (show id) ++ " and score<" ++ (show i) ++ ";")]
+
+
+scGreaterThan :: Int -> [Float] -> Int -> [String]
+scGreaterThan i _ id =
+    [("select nodeb,score from edge where id=" ++ (show id) ++ " and score>" ++ (show i) ++ ";"),
+     ("select nodea,score from edge where id=" ++ (show id) ++ " and score>" ++ (show i) ++ ";")]
+
+
+withinNDeviations :: Int -> [Float] -> Int -> [String]
+withinNDeviations n lst id =
+    let floatn = fromIntegral n
+        stddev = stdDeviation lst
+        avg = (L.foldl' (+) 0 lst) / (fromIntegral $ L.length lst)
+        upBound = floor $ avg + ((fromIntegral n) * stddev)
+        dnBound = ceiling $ avg - ((fromIntegral n) * stddev)
+    in [("select nodeb,score from edge where id=" ++ (show id) ++ "score<"
+        ++ (show upBound) ++ " and score>" ++ (show dnBound) ++ ";")
+        ,
+        ("select nodea,score from edge where id=" ++ (show id) ++ "score<"
+        ++ (show upBound) ++ " and score>" ++ (show dnBound) ++ ";")]
+
+
+stdDeviation :: [Float] -> Float
+stdDeviation vals =
+    let nvals = fromIntegral (L.length vals)
+        avg = (L.foldl' (+) 0 vals) / nvals
+        sqDiffs = L.map (\x -> (abs (x - avg))^2) vals
+        avgDiff = (L.foldl' (+) 0 sqDiffs) / nvals
+    in sqrt avgDiff
+
+
+allScores :: IO [Int]
+allScores = do
+    let sel = "select score from edge;"
+    rows <- wrap (\c -> quickQuery' c sel [])
+    return $ L.map (fromSql . flip (!!) 0) rows
+
+
+initialPositioning3D :: [Int] -> Int -> Int -> IO Vertices3D
+initialPositioning3D ids dimen npts =
+    let cbrt = (ceiling (fromIntegral npts ** (1/3)))
+        interval = (fromIntegral dimen) / (fromIntegral cbrt)
+        vals = take cbrt [ interval * i | i <- [0..] ]
+        coords = L.concat $ L.concat $ L.map (\x -> L.map (\y -> L.map (\z -> (x, y, z)) vals) vals) vals
+    in M.new >>= \tbl -> mapM_ (\(a, b) -> M.insert tbl a b) (L.zip ids coords) >> return tbl
+
+

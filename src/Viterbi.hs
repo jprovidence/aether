@@ -1,5 +1,6 @@
 module Viterbi (
     trainVit
+,   withFilter
 ,   nouns
 ,   nounsAndIndices
 ,   nounsAndIndices'
@@ -12,7 +13,7 @@ import qualified Data.HashTable.IO as M
 import qualified Data.ByteString.Char8 as B
 import qualified Data.List as L
 import Data.Maybe
-import Data.HashTable
+import Data.Text.Encoding
 import Control.Monad
 import System.IO.Unsafe
 import System.Directory
@@ -75,7 +76,7 @@ corpusFiles = getDirectoryContents "./brown" >>= return . L.map ("./brown/" ++) 
 
 incTraining :: Vit -> ByteString -> IO Vit
 incTraining vit str =
-    let spl = L.filter filterFunc $ B.splitWith splFunc str
+    let spl = L.filter noEmpty $ B.splitWith onWhiteSp str
     in foldM mergeV vit spl >>= finalize
 
 
@@ -150,7 +151,7 @@ depthOfGiven m word tag = unsafePerformIO $
 -- extract only nouns
 
 nouns :: ByteString -> IO [ByteString]
-nouns = return . (mapMaybe isNoun) . (L.filter filterFunc) . B.split ' '
+nouns = return . (mapMaybe isNoun) . (L.filter noEmpty) . B.split ' '
 
 
 ----------------------------------------------------------------------------------------------------
@@ -167,7 +168,7 @@ nounsAndIndices = (liftM L.reverse) . nounsAndIndices'
 -- does not bother to reverse the list. Nouns/indices will be backward order
 
 nounsAndIndices' :: ByteString -> IO [(ByteString, Int)]
-nounsAndIndices' = return . fst . (L.foldl' accFunc ([], 0)) . (L.filter filterFunc) . B.split ' '
+nounsAndIndices' = return . fst . (L.foldl' accFunc ([], 0)) . (L.filter noEmpty) . B.split ' '
 
     where accFunc :: ([(ByteString, Int)], Int) -> ByteString -> ([(ByteString, Int)], Int)
           accFunc (lst, idx) x = case isNoun x of
@@ -179,23 +180,10 @@ nounsAndIndices' = return . fst . (L.foldl' accFunc ([], 0)) . (L.filter filterF
 
 -- tag a given string with its parts of speech
 
-tag :: Vit -> ByteString -> IO ByteString
-tag unv str = do
+tag :: Vit -> [ByteString] -> IO ByteString
+tag unv lst = do
     v <- return (clear unv)
-    clean <- return $ cleanStr $ B.splitWith splFunc str
-    liftM snd $ foldM resolve (v, B.empty) clean
-
-    where cleanStr :: [ByteString] -> [ByteString]
-          cleanStr = mapMaybe rigorousFilter
-
-          rigorousFilter :: ByteString -> Maybe ByteString
-          rigorousFilter str =
-              let np = B.filter noPunc str
-              in case '=' `B.elem` str of
-                     True  -> Nothing
-                     False -> case (np == (B.pack "br")) || (np == (B.pack "hr"))  of
-                                 True  -> Nothing
-                                 False -> Just $ B.filter (\x -> x /= ' ') np
+    liftM snd $ foldM resolve (v, B.empty) lst
 
 
 ----------------------------------------------------------------------------------------------------
@@ -276,7 +264,70 @@ lrgMutual tbl acc (tag, pc) = tbl `M.lookup` tag >>= \res ->
 
 ----------------------------------------------------------------------------------------------------
 
---
+withFilter :: ([ByteString] -> IO ByteString) -> ByteString -> IO ByteString
+withFilter func doc =
+    let preprocessed = mapMaybe validateUTF $ B.splitWith onWhiteSp doc
+        clean = L.foldl' handlePunc [] $ L.map stringCleaners $ L.filter listLvlFilters preprocessed
+    in func clean >>= return . noComments
+
+
+
+
+onWhiteSp :: Char -> Bool
+onWhiteSp w = w == ' ' || w == '\n' || w == '\t'
+
+validateUTF :: ByteString -> Maybe ByteString
+validateUTF b = case decodeUtf8' b of
+                    Left  _ -> Nothing
+                    Right _ -> Just b
+
+listLvlFilters :: ByteString -> Bool
+listLvlFilters b = (noEmpty b) && (noHTML b) && (noAttr b)
+
+noEmpty :: ByteString -> Bool
+noEmpty b = (b /= B.pack " ") && (b /= B.empty)
+
+noHTML :: ByteString -> Bool
+noHTML b = ('<' `B.notElem` b) && ('>' `B.notElem` b)
+
+noAttr :: ByteString -> Bool
+noAttr b = '=' `B.notElem` b
+
+stringCleaners :: ByteString -> ByteString
+stringCleaners = rmRelics . noNumb . noPunc
+
+noNumb :: ByteString -> ByteString
+noNumb = B.filter (\x -> not (x `L.elem` numbers))
+
+noPunc :: ByteString -> ByteString
+noPunc str = B.filter (\b -> not (b `L.elem` punctuationMarks)) str
+
+rmRelics :: ByteString -> ByteString
+rmRelics str
+    | (B.pack "div") `B.isSuffixOf` str = B.take (blen - 3) str
+    | (B.pack "br") `B.isSuffixOf` str = B.take (blen - 2) str
+    | otherwise = str
+
+    where blen = B.length str
+
+
+-- many data sources are blogs. The word 'comments' appears often in a context unrelated to the
+-- article.
+
+noComments :: ByteString -> ByteString
+noComments =
+    L.foldl' repair (B.pack "") . L.filter containsComment . L.filter noEmpty . B.splitWith onWhiteSp
+
+    where containsComment str = not $ ((B.splitWith (== '/') str) !! 0) == (B.pack "comments")
+          repair acc x = acc `B.append` (x `B.snoc` ' ')
+
+
+-- unsure whether this helps
+
+handlePunc :: [ByteString] -> ByteString -> [ByteString]
+handlePunc acc x =
+    acc ++ (L.foldl' (\_acc _x -> _acc ++ [x]) [] $ B.splitWith (flip L.elem punctuationMarks) x)
+
 
 
 ----------------------------------------------------------------------------------------------------
@@ -303,31 +354,6 @@ isNoun str = let lst = B.split '/' str
              in case tg `L.elem` (L.map B.pack nounTags) of
                     True  -> Just wd
                     False -> Nothing
-
-
-----------------------------------------------------------------------------------------------------
-
--- determine whether a character is a space/tab/newline
-
-splFunc :: Char -> Bool
-splFunc w = w == ' ' || w == '\n' || w == '\t'
-
-
-----------------------------------------------------------------------------------------------------
-
--- determine whether a ByteString is a valid word (note not Data.Word, word in the langauge sense)
-
-filterFunc :: ByteString -> Bool
-filterFunc b = (b /= B.pack " ") && (b /= B.empty)
-
-
-----------------------------------------------------------------------------------------------------
-
--- determine if a char is punctuation
-
-noPunc :: Char -> Bool
-noPunc c = not (c `L.elem` punctuationMarks)
-
 
 ----------------------------------------------------------------------------------------------------
 
@@ -371,4 +397,13 @@ nounTags = [ "fw-at+nn", "fw-at+np", "fw-in+nn", "fw-in+np", "fw-nn", "fw-nn$", 
              "fw-nps", "fw-nr", "nn", "nn$", "nn+bez", "nn+hvd", "nn+hvz", "nn+in", "nn+md", "nn+nn",
              "nns", "nns$", "nns+md", "np", "np$", "np+bez", "np+hvz", "np+md", "nps", "nps$", "nr",
              "nr$", "nr+md", "nrs" ]
+
+
+numbers :: [Char]
+numbers = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+
+
+upperCases :: [Char]
+upperCases = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
+              'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
 

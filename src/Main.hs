@@ -13,9 +13,11 @@ import Entry
 import Communication
 import Viterbi
 import Text.Sim
-import Text.Nouns
+import Text.Nouns.SimpleForceCluster
+import Text.Nouns.SpringCluster
 import Text.Nouns.Graph
 import Control.Concurrent
+import Utility
 
 
 textA = unsafePerformIO $ readFile "./test_texts/textA.txt"
@@ -82,7 +84,7 @@ doTag vit = do
     input <- getLine
     putStrLn (">> Will tag document with id " ++ input ++ ".")
     entry <- entryFromId (read input)
-    res <- tag vit $ B.pack $ description entry
+    res <- withFilter (tag vit) $ B.pack $ description entry
     putStrLn ">> Tagged Document: \n\n"
     putStrLn (show res)
     putStrLn "\n\n>> Tag Another? y/n"
@@ -114,7 +116,27 @@ precluster = do
 
 
 runNounVisualization :: IO ()
-runNounVisualization = runCluster "user"
+runNounVisualization = do
+    putStrLn ">> What do you want to visualize?"
+    putStrLn ">> 1 : Browser Simple Force Clustering."
+    putStrLn ">> 2 : Tulip Undirected Noun Graph."
+    putStrLn ">> 3 : Processing Spring Clustering."
+
+    input <- getLine >>= return . read
+
+    adv <- case input of
+              1 -> return ""
+              2 -> do
+                  putStrLn ">> Use descriptive labels? y/n"
+                  getLine
+              3 -> return ""
+
+    case input of
+        1 -> simpleForceCluster "user"
+        2 -> case affirmative adv of
+                True  -> graphToTulip'
+                False -> graphToTulip
+        3 -> springCluster
 
 
 runAllTests :: IO ()
@@ -135,15 +157,15 @@ testViterbi = do
     vit <- trainVit
 
     putStrLn ">> All tags:\n"
-    tag vit (B.pack textA) >>= putStrLn . show
+    withFilter (tag vit) (B.pack textA) >>= putStrLn . show
     putStrLn "\n\n----------------------------------------\n\n"
 
     putStrLn ">> Nouns: \n"
-    tag vit (B.pack textA) >>= nouns >>= putStrLn . show
+    withFilter (tag vit) (B.pack textA) >>= nouns >>= putStrLn . show
     putStrLn "\n\n----------------------------------------\n\n"
 
     putStrLn ">> Nouns + Indices: \n"
-    tag vit (B.pack textA) >>= nounsAndIndices >>= putStrLn . show
+    withFilter (tag vit) (B.pack textA) >>= nounsAndIndices >>= putStrLn . show
 
 
 testTextSim :: IO ()
@@ -152,10 +174,10 @@ testTextSim = do
     vit <- trainVit
 
     putStrLn ">> Nouns A"
-    tag vit (B.pack textA) >>= nouns >>= putStrLn . show
+    withFilter (tag vit) (B.pack textA) >>= nouns >>= putStrLn . show
 
     putStrLn ">> Nouns B"
-    tag vit (B.pack textB) >>= nouns >>= putStrLn . show
+    withFilter (tag vit) (B.pack textB) >>= nouns >>= putStrLn . show
 
     putStrLn ">> totalRelative byIntersection euclideanDistance"
     sim <- vbaSimilarityVit vit textA textB totalRelative byIntersection euclideanDistance
